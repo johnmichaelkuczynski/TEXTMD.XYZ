@@ -721,6 +721,101 @@ export async function registerRoutes(app: Express): Promise<Express> {
     }
   });
   
+  // Output management endpoints (for free-tier limiting)
+  app.get("/api/output/:outputId", async (req: Request, res: Response) => {
+    try {
+      const { outputId } = req.params;
+      const user = req.user as any;
+      const isPro = user?.isPro || false;
+      const userId = user?.id || null;
+      const sessionId = req.cookies?.anon_session || null;
+      
+      const output = await storage.getGeneratedOutput(outputId);
+      if (!output) {
+        return res.status(404).json({ error: "Output not found" });
+      }
+      
+      const isOwner = (userId && output.userId === userId) || 
+                      (sessionId && output.sessionId === sessionId);
+      
+      if (!isOwner) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+      
+      res.json({
+        outputId: output.outputId,
+        outputType: output.outputType,
+        content: isPro ? output.outputFull : output.outputPreview,
+        isTruncated: isPro ? false : output.isTruncated,
+        createdAt: output.createdAt,
+      });
+    } catch (error: any) {
+      console.error("Get output error:", error);
+      res.status(500).json({ error: "Failed to get output" });
+    }
+  });
+  
+  app.get("/api/output/:outputId/full", async (req: Request, res: Response) => {
+    try {
+      const { outputId } = req.params;
+      const user = req.user as any;
+      const isPro = user?.isPro || false;
+      const userId = user?.id || null;
+      const sessionId = req.cookies?.anon_session || null;
+      
+      if (!isPro) {
+        return res.status(403).json({ 
+          error: "Pro subscription required", 
+          requiresUpgrade: true 
+        });
+      }
+      
+      const output = await storage.getGeneratedOutput(outputId);
+      if (!output) {
+        return res.status(404).json({ error: "Output not found" });
+      }
+      
+      const isOwner = (userId && output.userId === userId) || 
+                      (sessionId && output.sessionId === sessionId);
+      
+      if (!isOwner) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+      
+      res.json({
+        outputId: output.outputId,
+        outputType: output.outputType,
+        content: output.outputFull,
+        isTruncated: false,
+        createdAt: output.createdAt,
+      });
+    } catch (error: any) {
+      console.error("Get full output error:", error);
+      res.status(500).json({ error: "Failed to get full output" });
+    }
+  });
+  
+  app.post("/api/outputs/link-session", async (req: Request, res: Response) => {
+    try {
+      if (!req.isAuthenticated() || !req.user) {
+        return res.status(401).json({ error: "Authentication required" });
+      }
+      
+      const userId = (req.user as any).id;
+      const sessionId = req.cookies?.anon_session;
+      
+      if (sessionId) {
+        await storage.linkSessionOutputsToUser(sessionId, userId);
+        res.clearCookie('anon_session');
+      }
+      
+      res.json({ success: true });
+    } catch (error: any) {
+      console.error("Link session outputs error:", error);
+      res.status(500).json({ error: "Failed to link session outputs" });
+    }
+  });
+  
   // API health check endpoint
   app.get("/api/check-api", async (_req: Request, res: Response) => {
     const openai_key = process.env.OPENAI_API_KEY;

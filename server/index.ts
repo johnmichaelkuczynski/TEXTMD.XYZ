@@ -1,5 +1,6 @@
 import express, { type Request, Response, NextFunction } from "express";
 import { createServer } from "http";
+import cookieParser from "cookie-parser";
 
 import { setupVite, serveStatic, log } from "./vite";
 import { registerRoutes } from "./routes";
@@ -9,6 +10,7 @@ import { setupWebSocketServer, cleanupOldJobs } from "./services/ccStreamingServ
 const app = express();
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: false, limit: '50mb' }));
+app.use(cookieParser());
 
 // Headers for iframe embedding (Wix compatibility)
 app.use((req, res, next) => {
