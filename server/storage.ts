@@ -30,6 +30,8 @@ export interface IStorage {
   getUser(id: number): Promise<User | undefined>;
   createUser(user: InsertUser): Promise<User>;
   getUserByUsername(username: string): Promise<User | undefined>;
+  getUserByGoogleId(googleId: string): Promise<User | undefined>;
+  updateUserGoogleId(userId: number, googleId: string, email?: string, profileImageUrl?: string): Promise<User>;
   sessionStore: any;
   
   // Document operations
@@ -92,6 +94,24 @@ export class DatabaseStorage implements IStorage {
     const [user] = await db
       .insert(users)
       .values(insertUser)
+      .returning();
+    return user;
+  }
+
+  async getUserByGoogleId(googleId: string): Promise<User | undefined> {
+    const [user] = await db.select().from(users).where(eq(users.googleId, googleId));
+    return user || undefined;
+  }
+
+  async updateUserGoogleId(userId: number, googleId: string, email?: string, profileImageUrl?: string): Promise<User> {
+    const updateData: any = { googleId };
+    if (email) updateData.email = email;
+    if (profileImageUrl) updateData.profileImageUrl = profileImageUrl;
+    
+    const [user] = await db
+      .update(users)
+      .set(updateData)
+      .where(eq(users.id, userId))
       .returning();
     return user;
   }

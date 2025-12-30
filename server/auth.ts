@@ -1,5 +1,6 @@
 import passport from "passport";
 import { Strategy as LocalStrategy } from "passport-local";
+import { Strategy as GoogleStrategy, Profile } from "passport-google-oauth20";
 import { Express } from "express";
 import session from "express-session";
 import { scrypt, randomBytes, timingSafeEqual } from "crypto";
@@ -41,6 +42,23 @@ async function comparePasswords(supplied: string, stored: string) {
   const hashedBuf = Buffer.from(hashed, "hex");
   const suppliedBuf = (await scryptAsync(supplied, salt, 64)) as Buffer;
   return timingSafeEqual(hashedBuf, suppliedBuf);
+}
+
+async function generateUniqueUsername(baseUsername: string): Promise<string> {
+  let username = baseUsername.toLowerCase().replace(/[^a-z0-9]/g, '');
+  let counter = 0;
+  
+  while (true) {
+    const candidate = counter === 0 ? username : `${username}${counter}`;
+    const existing = await storage.getUserByUsername(candidate);
+    if (!existing) {
+      return candidate;
+    }
+    counter++;
+    if (counter > 1000) {
+      return `${username}_${randomBytes(4).toString('hex')}`;
+    }
+  }
 }
 
 export function setupAuth(app: Express) {
@@ -87,6 +105,69 @@ export function setupAuth(app: Express) {
       }
     }),
   );
+
+  // Google OAuth Strategy
+  if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET) {
+    const callbackURL = process.env.REPLIT_DEV_DOMAIN 
+      ? `https://${process.env.REPLIT_DEV_DOMAIN}/api/auth/google/callback`
+      : process.env.REPLIT_DOMAINS
+        ? `https://${process.env.REPLIT_DOMAINS.split(',')[0]}/api/auth/google/callback`
+        : 'http://localhost:5000/api/auth/google/callback';
+    
+    console.log(`Google OAuth configured with callback: ${callbackURL}`);
+    
+    passport.use(
+      new GoogleStrategy(
+        {
+          clientID: process.env.GOOGLE_CLIENT_ID,
+          clientSecret: process.env.GOOGLE_CLIENT_SECRET,
+          callbackURL,
+        },
+        async (accessToken: string, refreshToken: string, profile: Profile, done) => {
+          try {
+            const googleId = profile.id;
+            const email = profile.emails?.[0]?.value;
+            const profileImageUrl = profile.photos?.[0]?.value;
+            
+            // Check if user exists with this Google ID
+            let user = await storage.getUserByGoogleId(googleId);
+            
+            if (user) {
+              return done(null, user);
+            }
+            
+            // Check if user exists with this email (link accounts)
+            if (email) {
+              const existingUserByEmail = await storage.getUserByUsername(email.toLowerCase());
+              if (existingUserByEmail) {
+                // Link Google account to existing user
+                user = await storage.updateUserGoogleId(existingUserByEmail.id, googleId, email, profileImageUrl);
+                return done(null, user);
+              }
+            }
+            
+            // Create new user with Google OAuth
+            const username = email?.split('@')[0] || `google_${googleId}`;
+            const uniqueUsername = await generateUniqueUsername(username);
+            
+            user = await storage.createUser({
+              username: uniqueUsername,
+              password: await hashPassword(randomBytes(32).toString('hex')), // Random password for OAuth users
+              email: email || undefined,
+              googleId,
+              profileImageUrl,
+            });
+            
+            return done(null, user);
+          } catch (error) {
+            return done(error as Error);
+          }
+        }
+      )
+    );
+  } else {
+    console.log('Google OAuth not configured - missing GOOGLE_CLIENT_ID or GOOGLE_CLIENT_SECRET');
+  }
 
   passport.serializeUser((user, done) => done(null, user.id));
   passport.deserializeUser(async (id: number, done) => {
@@ -188,4 +269,21 @@ export function setupAuth(app: Express) {
     if (!req.isAuthenticated()) return res.sendStatus(401);
     res.json(req.user);
   });
+
+  // Google OAuth routes
+  if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET) {
+    app.get("/api/auth/google", passport.authenticate("google", { 
+      scope: ["profile", "email"] 
+    }));
+
+    app.get("/api/auth/google/callback", 
+      passport.authenticate("google", { 
+        failureRedirect: "/?error=google_auth_failed" 
+      }),
+      (req, res) => {
+        // Successful authentication, redirect to home
+        res.redirect("/");
+      }
+    );
+  }
 }

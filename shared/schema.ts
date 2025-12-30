@@ -2,12 +2,14 @@ import { pgTable, text, serial, integer, boolean, jsonb, timestamp, real } from 
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
-// Updated User model - username/password authentication
+// Updated User model - username/password authentication with optional Google OAuth
 export const users = pgTable("users", {
   id: serial("id").primaryKey(),
   username: text("username").notNull().unique(),
   password: text("password").notNull(),
   email: text("email"), // Optional email field
+  googleId: text("google_id").unique(), // Google OAuth ID
+  profileImageUrl: text("profile_image_url"), // Google profile picture
   createdAt: timestamp("created_at").defaultNow().notNull(),
   lastActiveAt: timestamp("last_active_at").defaultNow().notNull(),
 });
@@ -16,6 +18,8 @@ export const insertUserSchema = createInsertSchema(users).pick({
   username: true,
   password: true,
   email: true,
+  googleId: true,
+  profileImageUrl: true,
 });
 
 // Document model for storing analyzed documents
