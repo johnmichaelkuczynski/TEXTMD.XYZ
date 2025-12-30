@@ -3067,6 +3067,12 @@ Structural understanding is always understanding of relationships. Observational
     try {
       const { text, mode, targetDomain, fidelityLevel, mathFramework, constraintType, rigorLevel, customInstructions, truthMapping, mathTruthMapping, literalTruth, llmProvider } = req.body;
 
+      // Check if user is logged in AND has Pro subscription
+      const user = req.user as any;
+      const isPro = user?.isPro === true;
+      const userId = user?.id || null;
+      const sessionId = ensureAnonSession(req, res);
+
       if (!text || !mode) {
         return res.status(400).json({ 
           success: false,
@@ -3075,6 +3081,7 @@ Structural understanding is always understanding of relationships. Observational
       }
 
       console.log(`Text Model Validator - Mode: ${mode}, Target Domain: ${targetDomain || 'not specified'}`);
+      console.log(`User: ${userId ? 'logged in' : 'anonymous'}, Pro: ${isPro}`);
 
       // Build the prompt based on the mode
       let systemPrompt = "";
@@ -3098,14 +3105,28 @@ Structural understanding is always understanding of relationships. Observational
               });
             }
             
+            // Store output and apply truncation for non-Pro users
+            const outputResult = await storeAndReturnOutput(
+              result.output,
+              'text-model-validator',
+              isPro,
+              userId,
+              sessionId,
+              { mode, reconstructionMethod: 'position-list' }
+            );
+            
             return res.json({
               success: true,
-              output: result.output,
+              output: outputResult.content,
               mode: mode,
               reconstructionMethod: 'position-list',
               positionsProcessed: result.positionsProcessed,
               positionsSelected: result.positionsSelected,
-              totalPositions: result.totalPositions
+              totalPositions: result.totalPositions,
+              outputId: outputResult.outputId,
+              isTruncated: outputResult.isTruncated,
+              fullWordCount: outputResult.fullWordCount,
+              previewWordCount: outputResult.previewWordCount
             });
           } catch (plError: any) {
             console.error('[Position-List] Error:', plError);
@@ -3218,15 +3239,29 @@ ${'═'.repeat(60)}
             // Combine all parts: Custom Instructions -> Analysis -> Full Outline -> Full Document
             const fullOutput = customInstructionsHeader + analysisHeader + fullOutlineSection + documentHeader + result.reconstructedText;
             
+            // Store output and apply truncation for non-Pro users
+            const outputResult = await storeAndReturnOutput(
+              fullOutput,
+              'text-model-validator',
+              isPro,
+              userId,
+              sessionId,
+              { mode, reconstructionMethod: 'outline-first' }
+            );
+            
             return res.json({
               success: true,
-              output: fullOutput,
+              output: outputResult.content,
               mode: mode,
               inputWordCount: result.processingStats.inputWords,
               outputWordCount: result.processingStats.outputWords,
               outline: result.outline,
               sectionsProcessed: result.processingStats.sectionsProcessed,
-              processingTimeMs: result.processingStats.timeMs
+              processingTimeMs: result.processingStats.timeMs,
+              outputId: outputResult.outputId,
+              isTruncated: outputResult.isTruncated,
+              fullWordCount: outputResult.fullWordCount,
+              previewWordCount: outputResult.previewWordCount
             });
           } catch (ofError: any) {
             console.error('[Outline-First] Error:', ofError);
@@ -3277,13 +3312,29 @@ ${'═'.repeat(60)}
 
             console.log(`[Cross-Chunk] Complete: ${result.chunksProcessed || 0} chunks processed`);
             
+            const fullOutput = customInstructionsHeader + analysisHeader + documentHeader + result.reconstructedText;
+            
+            // Store output and apply truncation for non-Pro users
+            const outputResult = await storeAndReturnOutput(
+              fullOutput,
+              'text-model-validator',
+              isPro,
+              userId,
+              sessionId,
+              { mode, reconstructionMethod: 'cross-chunk' }
+            );
+            
             return res.json({
               success: true,
-              output: customInstructionsHeader + analysisHeader + documentHeader + result.reconstructedText,
+              output: outputResult.content,
               mode: mode,
               inputWordCount: inputWordCount,
               reconstructionMethod: 'cross-chunk',
-              chunksProcessed: result.chunksProcessed
+              chunksProcessed: result.chunksProcessed,
+              outputId: outputResult.outputId,
+              isTruncated: outputResult.isTruncated,
+              fullWordCount: outputResult.fullWordCount,
+              previewWordCount: outputResult.previewWordCount
             });
           } catch (ccError: any) {
             console.error('[Cross-Chunk] Error:', ccError);
@@ -4186,10 +4237,26 @@ Model: ${providerLabels[provider] || provider}`;
       
       parameterHeader += `\n═══════════════════════════════════════════════════\n\n`;
 
+      const fullOutput = parameterHeader + output;
+      
+      // Store output and apply truncation for non-Pro users
+      const outputResult = await storeAndReturnOutput(
+        fullOutput,
+        'text-model-validator',
+        isPro,
+        userId,
+        sessionId,
+        { mode, targetDomain, fidelityLevel }
+      );
+
       res.json({
         success: true,
-        output: parameterHeader + output,
-        mode: mode
+        output: outputResult.content,
+        mode: mode,
+        outputId: outputResult.outputId,
+        isTruncated: outputResult.isTruncated,
+        fullWordCount: outputResult.fullWordCount,
+        previewWordCount: outputResult.previewWordCount
       });
 
     } catch (error: any) {
