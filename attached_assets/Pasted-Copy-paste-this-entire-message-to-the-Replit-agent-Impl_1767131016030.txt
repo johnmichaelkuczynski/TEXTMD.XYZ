@@ -1,0 +1,115 @@
+Copy/paste this **entire message** to the Replit agent:
+
+---
+
+**Implement complete “Preview → Subscribe → Unlock Full Output” system.**
+
+### A) Subscription = unlimited use for 1 month (debug price)
+
+1. Keep Stripe subscription model: `$1/month` (Price ID from secret `STRIPE_PRICE_ID`).
+2. While subscription status is **active**, user has **unlimited access** and **full outputs** (`is_pro=true`).
+3. If subscription becomes **canceled / unpaid / past_due / incomplete_expired**, set `is_pro=false`.
+
+### B) Free users can use the app, but only see a preview
+
+1. Free users include:
+
+   * not logged in
+   * logged in but `is_pro=false`
+2. When free user generates output, the app must return only a **preview**:
+
+   * preview length = **min(1000 words, floor(0.65 * totalWords))**
+   * Word count = split on whitespace
+   * Preview = first `previewWords` words joined with spaces
+3. Truncation must be enforced **SERVER-SIDE ONLY** (never rely on frontend truncation).
+
+### C) Free user can pay later and unlock the exact output they already generated (no regeneration)
+
+1. On every generation request, the server must generate and store the **FULL output** in the database, then compute and store the preview.
+2. Database (or table) must store outputs with:
+
+   * `id` (outputId)
+   * `full_text`
+   * `preview_text`
+   * `created_at`
+   * `user_id` (nullable)
+   * `anon_session_id` (nullable)
+3. If user is NOT logged in:
+
+   * create a persistent `anon_session_id` cookie (httpOnly, sameSite=Lax, secure in prod)
+   * store the output with that `anon_session_id`
+   * return `outputId` + `preview_text`
+4. If user logs in later:
+
+   * automatically attach all outputs belonging to their `anon_session_id` to their `user_id`
+5. If user subscribes later:
+
+   * do NOT regenerate anything
+   * they must be able to request the same `outputId` and receive the stored `full_text`.
+
+### D) Required API routes
+
+1. `POST /api/generate`
+
+   * always store full output
+   * if free → return `{ outputId, previewText, isPro:false }` (DO NOT include full text)
+   * if pro → return `{ outputId, fullText, isPro:true }`
+2. `GET /api/output/:outputId`
+
+   * if pro → return full text
+   * if free → return preview only
+   * access rules:
+
+     * allow if output belongs to the logged-in user OR matches current anon_session_id cookie
+3. `GET /api/billing/status`
+
+   * returns `{ is_pro, subscription_status }` for current session/user
+4. Stripe routes (already implemented, but ensure correctness):
+
+   * `POST /api/stripe/create-checkout-session` (logged in OR anon session allowed)
+
+     * subscription mode using `STRIPE_PRICE_ID`
+     * include metadata: `{ userId (if exists), anon_session_id }`
+     * success URL: `https://textmd.xyz/billing/success`
+     * cancel URL: `https://textmd.xyz/billing/cancel`
+   * `POST /api/stripe/webhook`
+
+     * verify signature with `STRIPE_WEBHOOK_SECRET`
+     * on `checkout.session.completed` and subscription updates:
+
+       * find the user via metadata (`userId`) OR via stored mapping from `anon_session_id`
+       * set `is_pro=true` when active
+       * set `is_pro=false` when canceled/past_due/unpaid/incomplete_expired
+
+### E) Frontend behavior
+
+1. Users can use the app without logging in.
+2. After generating output:
+
+   * show preview
+   * show “Unlock full output ($1/month)” button
+   * store `outputId` client-side so it can be fetched again
+3. After successful payment:
+
+   * refresh billing status
+   * automatically refetch the same `outputId` and reveal full output (no regeneration)
+4. Pro users never see previews; they always see full.
+
+### F) Non-negotiable security rule
+
+**Never send full output text to free users in any API response.** Preview only.
+
+### G) Tests (must add)
+
+Add backend tests verifying:
+
+1. Free user response never includes `fullText`
+2. Preview length rule works for:
+
+   * <1000 words
+   * > 1000 words
+3. After setting `is_pro=true`, same `outputId` returns stored `fullText` without regenerating
+
+**Deliverable:** anonymous users can generate previews; later they subscribe and instantly unlock the exact same stored full output without regenerating; subscription gives unlimited access for one month.
+
+---
