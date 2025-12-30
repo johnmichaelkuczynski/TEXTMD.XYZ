@@ -630,7 +630,13 @@ export async function registerRoutes(app: Express): Promise<Express> {
       switch (event.type) {
         case 'checkout.session.completed': {
           const session = event.data.object as any;
-          const userId = parseInt(session.metadata?.userId);
+          let userId = parseInt(session.metadata?.userId);
+          
+          // Fallback: look up user by Stripe customer ID if metadata is missing
+          if (!userId && session.customer) {
+            const user = await storage.getUserByStripeCustomerId(session.customer);
+            if (user) userId = user.id;
+          }
           
           if (userId) {
             await storage.updateUserSubscription(userId, {
@@ -640,6 +646,8 @@ export async function registerRoutes(app: Express): Promise<Express> {
               isPro: true,
             });
             console.log(`User ${userId} subscription activated`);
+          } else {
+            console.log(`Webhook: Could not find user for checkout session ${session.id}`);
           }
           break;
         }

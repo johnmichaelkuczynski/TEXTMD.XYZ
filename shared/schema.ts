@@ -946,6 +946,31 @@ export type InsertPipelineObjection = z.infer<typeof insertPipelineObjectionSche
 export type PipelineObjection = typeof pipelineObjections.$inferSelect;
 
 // ═══════════════════════════════════════════════════════════════════════════
+// GENERATED OUTPUTS TABLE (for free-tier output limiting)
+// ═══════════════════════════════════════════════════════════════════════════
+
+export const generatedOutputs = pgTable("generated_outputs", {
+  id: serial("id").primaryKey(),
+  outputId: text("output_id").notNull().unique(), // UUID for referencing output
+  outputType: text("output_type").notNull(), // rewrite, reconstruction, objections, bulletproof, etc.
+  outputFull: text("output_full").notNull(), // Complete generated content
+  outputPreview: text("output_preview").notNull(), // Truncated preview for non-pro users
+  isTruncated: boolean("is_truncated").default(false).notNull(), // Whether preview differs from full
+  userId: integer("user_id").references(() => users.id), // Nullable - for logged in users
+  sessionId: text("session_id"), // Anonymous session token for non-logged-in users
+  metadata: jsonb("metadata"), // Additional context (e.g., original input word count)
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const insertGeneratedOutputSchema = createInsertSchema(generatedOutputs).omit({
+  id: true,
+  createdAt: true,
+});
+
+export type InsertGeneratedOutput = z.infer<typeof insertGeneratedOutputSchema>;
+export type GeneratedOutput = typeof generatedOutputs.$inferSelect;
+
+// ═══════════════════════════════════════════════════════════════════════════
 // PIPELINE SKELETON TYPES
 // ═══════════════════════════════════════════════════════════════════════════
 
