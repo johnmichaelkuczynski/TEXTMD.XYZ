@@ -727,7 +727,6 @@ export async function registerRoutes(app: Express): Promise<Express> {
   const ensureAnonSession = (req: Request, res: Response): string | null => {
     let sessionId = req.cookies?.anon_session;
     if (!sessionId && !req.isAuthenticated()) {
-      const { v4: uuidv4 } = require('uuid');
       sessionId = uuidv4();
       res.cookie('anon_session', sessionId, {
         httpOnly: true,
