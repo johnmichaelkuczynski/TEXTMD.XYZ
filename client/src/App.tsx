@@ -242,7 +242,7 @@ function Navigation() {
             <div className="flex items-center gap-4 border-l border-primary-foreground/20 pl-4">
               {user ? (
                 <div className="flex items-center gap-2">
-                  <span className="text-sm">Welcome, {user.username}!</span>
+                  <span className="text-sm">Welcome, {user.email || user.username}!</span>
                   <Button 
                     variant="ghost" 
                     size="sm" 
@@ -258,12 +258,12 @@ function Navigation() {
                 <Button 
                   variant="ghost" 
                   size="sm"
-                  onClick={() => setLoginDialogOpen(true)}
+                  onClick={() => window.location.href = '/auth/google'}
                   className="text-primary-foreground hover:bg-primary-foreground/10"
                   data-testid="button-open-login"
                 >
                   <User className="h-4 w-4 mr-1" />
-                  Login / Register
+                  Sign in with Google
                 </Button>
               )}
             </div>
