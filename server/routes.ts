@@ -570,8 +570,8 @@ export async function registerRoutes(app: Express): Promise<Express> {
   // ========================
   
   // Initialize Stripe with secret key
-  const Stripe = require('stripe');
-  const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
+  const { default: Stripe } = await import('stripe');
+  const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!);
   
   // Create checkout session for subscription
   app.post("/api/stripe/create-checkout-session", async (req: Request, res: Response) => {
@@ -614,8 +614,8 @@ export async function registerRoutes(app: Express): Promise<Express> {
   
   // Stripe webhook handler
   app.post("/api/stripe/webhook", express.raw({ type: 'application/json' }), async (req: Request, res: Response) => {
-    const sig = req.headers['stripe-signature'];
-    const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
+    const sig = req.headers['stripe-signature'] as string;
+    const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET!;
     
     let event;
     
@@ -629,13 +629,13 @@ export async function registerRoutes(app: Express): Promise<Express> {
     try {
       switch (event.type) {
         case 'checkout.session.completed': {
-          const session = event.data.object;
+          const session = event.data.object as any;
           const userId = parseInt(session.metadata?.userId);
           
           if (userId) {
             await storage.updateUserSubscription(userId, {
-              stripeCustomerId: session.customer,
-              stripeSubscriptionId: session.subscription,
+              stripeCustomerId: session.customer as string,
+              stripeSubscriptionId: session.subscription as string,
               subscriptionStatus: 'active',
               isPro: true,
             });
@@ -645,8 +645,14 @@ export async function registerRoutes(app: Express): Promise<Express> {
         }
         
         case 'customer.subscription.updated': {
-          const subscription = event.data.object;
-          const userId = parseInt(subscription.metadata?.userId);
+          const subscription = event.data.object as any;
+          let userId = parseInt(subscription.metadata?.userId);
+          
+          // Fallback: look up user by Stripe customer ID if metadata is missing
+          if (!userId && subscription.customer) {
+            const user = await storage.getUserByStripeCustomerId(subscription.customer);
+            if (user) userId = user.id;
+          }
           
           if (userId) {
             const status = subscription.status;
@@ -660,8 +666,14 @@ export async function registerRoutes(app: Express): Promise<Express> {
         }
         
         case 'customer.subscription.deleted': {
-          const subscription = event.data.object;
-          const userId = parseInt(subscription.metadata?.userId);
+          const subscription = event.data.object as any;
+          let userId = parseInt(subscription.metadata?.userId);
+          
+          // Fallback: look up user by Stripe customer ID if metadata is missing
+          if (!userId && subscription.customer) {
+            const user = await storage.getUserByStripeCustomerId(subscription.customer);
+            if (user) userId = user.id;
+          }
           
           if (userId) {
             await storage.updateUserSubscription(userId, {
