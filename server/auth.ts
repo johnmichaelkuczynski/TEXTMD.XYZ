@@ -108,11 +108,7 @@ export function setupAuth(app: Express) {
 
   // Google OAuth Strategy
   if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET) {
-    const callbackURL = process.env.REPLIT_DEV_DOMAIN 
-      ? `https://${process.env.REPLIT_DEV_DOMAIN}/api/auth/google/callback`
-      : process.env.REPLIT_DOMAINS
-        ? `https://${process.env.REPLIT_DOMAINS.split(',')[0]}/api/auth/google/callback`
-        : 'http://localhost:5000/api/auth/google/callback';
+    const callbackURL = 'https://textmd.xyz/auth/google/callback';
     
     console.log(`Google OAuth configured with callback: ${callbackURL}`);
     
@@ -272,11 +268,11 @@ export function setupAuth(app: Express) {
 
   // Google OAuth routes
   if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET) {
-    app.get("/api/auth/google", passport.authenticate("google", { 
+    app.get("/auth/google", passport.authenticate("google", { 
       scope: ["profile", "email"] 
     }));
 
-    app.get("/api/auth/google/callback", 
+    app.get("/auth/google/callback", 
       passport.authenticate("google", { 
         failureRedirect: "/?error=google_auth_failed" 
       }),
