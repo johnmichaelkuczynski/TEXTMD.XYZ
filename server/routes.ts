@@ -1,4 +1,4 @@
-import { Express, Request, Response, NextFunction } from "express";
+import express, { Express, Request, Response, NextFunction } from "express";
 import { setupAuth } from "./auth";
 import multer from "multer";
 import { storage } from "./storage";
@@ -564,6 +564,142 @@ export async function registerRoutes(app: Express): Promise<Express> {
   
   // Setup authentication
   setupAuth(app);
+  
+  // ========================
+  // Stripe Subscription Routes
+  // ========================
+  
+  // Initialize Stripe with secret key
+  const Stripe = require('stripe');
+  const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
+  
+  // Create checkout session for subscription
+  app.post("/api/stripe/create-checkout-session", async (req: Request, res: Response) => {
+    try {
+      if (!req.isAuthenticated() || !req.user) {
+        return res.status(401).json({ error: "Authentication required" });
+      }
+      
+      const userId = (req.user as any).id;
+      const userEmail = (req.user as any).email;
+      
+      const session = await stripe.checkout.sessions.create({
+        mode: 'subscription',
+        payment_method_types: ['card'],
+        line_items: [
+          {
+            price: process.env.STRIPE_PRICE_ID,
+            quantity: 1,
+          },
+        ],
+        success_url: 'https://textmd.xyz/billing/success',
+        cancel_url: 'https://textmd.xyz/billing/cancel',
+        customer_email: userEmail,
+        metadata: {
+          userId: userId.toString(),
+        },
+        subscription_data: {
+          metadata: {
+            userId: userId.toString(),
+          },
+        },
+      });
+      
+      res.json({ url: session.url });
+    } catch (error: any) {
+      console.error("Stripe checkout session error:", error);
+      res.status(500).json({ error: error.message || "Failed to create checkout session" });
+    }
+  });
+  
+  // Stripe webhook handler
+  app.post("/api/stripe/webhook", express.raw({ type: 'application/json' }), async (req: Request, res: Response) => {
+    const sig = req.headers['stripe-signature'];
+    const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
+    
+    let event;
+    
+    try {
+      event = stripe.webhooks.constructEvent(req.body, sig, webhookSecret);
+    } catch (err: any) {
+      console.error("Webhook signature verification failed:", err.message);
+      return res.status(400).send(`Webhook Error: ${err.message}`);
+    }
+    
+    try {
+      switch (event.type) {
+        case 'checkout.session.completed': {
+          const session = event.data.object;
+          const userId = parseInt(session.metadata?.userId);
+          
+          if (userId) {
+            await storage.updateUserSubscription(userId, {
+              stripeCustomerId: session.customer,
+              stripeSubscriptionId: session.subscription,
+              subscriptionStatus: 'active',
+              isPro: true,
+            });
+            console.log(`User ${userId} subscription activated`);
+          }
+          break;
+        }
+        
+        case 'customer.subscription.updated': {
+          const subscription = event.data.object;
+          const userId = parseInt(subscription.metadata?.userId);
+          
+          if (userId) {
+            const status = subscription.status;
+            await storage.updateUserSubscription(userId, {
+              subscriptionStatus: status,
+              isPro: status === 'active',
+            });
+            console.log(`User ${userId} subscription updated to ${status}`);
+          }
+          break;
+        }
+        
+        case 'customer.subscription.deleted': {
+          const subscription = event.data.object;
+          const userId = parseInt(subscription.metadata?.userId);
+          
+          if (userId) {
+            await storage.updateUserSubscription(userId, {
+              subscriptionStatus: 'canceled',
+              isPro: false,
+            });
+            console.log(`User ${userId} subscription canceled`);
+          }
+          break;
+        }
+      }
+      
+      res.json({ received: true });
+    } catch (error: any) {
+      console.error("Webhook processing error:", error);
+      res.status(500).json({ error: "Webhook processing failed" });
+    }
+  });
+  
+  // Get billing status
+  app.get("/api/billing/status", async (req: Request, res: Response) => {
+    try {
+      if (!req.isAuthenticated() || !req.user) {
+        return res.status(401).json({ error: "Authentication required" });
+      }
+      
+      const user = req.user as any;
+      
+      res.json({
+        subscriptionStatus: user.subscriptionStatus || null,
+        isPro: user.isPro || false,
+        stripeCustomerId: user.stripeCustomerId || null,
+      });
+    } catch (error: any) {
+      console.error("Billing status error:", error);
+      res.status(500).json({ error: "Failed to get billing status" });
+    }
+  });
   
   // API health check endpoint
   app.get("/api/check-api", async (_req: Request, res: Response) => {
