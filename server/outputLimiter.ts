@@ -15,6 +15,11 @@ export function isDevBypass(req: Request): boolean {
     return false;
   }
   
+  // Check DEV_FULL_ACCESS environment variable first
+  if (process.env.DEV_FULL_ACCESS === 'true') {
+    return true;
+  }
+  
   // Bypass in development mode
   if (process.env.NODE_ENV !== 'production') {
     return true;

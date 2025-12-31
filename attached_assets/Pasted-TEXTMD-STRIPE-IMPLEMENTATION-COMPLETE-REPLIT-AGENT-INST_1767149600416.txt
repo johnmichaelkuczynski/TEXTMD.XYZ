@@ -1,0 +1,278 @@
+TEXTMD STRIPE IMPLEMENTATION — COMPLETE REPLIT AGENT INSTRUCTIONS
+==================================================================
+
+IMPORTANT: Follow these instructions EXACTLY. Do not add helper logic.
+Do not add session migration. Do not add claiming logic. Do not deviate.
+
+==================================================================
+SECTION 1: DATABASE
+==================================================================
+
+Database: Neon PostgreSQL (already connected via DATABASE_URL)
+Table: users
+
+REQUIRED COLUMN (add if missing):
+- is_pro BOOLEAN DEFAULT FALSE
+
+This is the SINGLE SOURCE OF TRUTH for payment status.
+- is_pro = true → user has active subscription
+- is_pro = false → user does not have active subscription
+
+DO NOT use any other field to determine payment status.
+DO NOT check stripe_subscription_id or paid_until for access decisions.
+ONLY check is_pro.
+
+==================================================================
+SECTION 2: ENVIRONMENT VARIABLES
+==================================================================
+
+Required in Replit Secrets:
+- DATABASE_URL (already exists)
+- STRIPE_SECRET_KEY (already exists)
+- STRIPE_WEBHOOK_SECRET (already exists)
+- STRIPE_PRICE_ID (already exists — this is the $1/month subscription price)
+- DEV_FULL_ACCESS (set to "true" for dev bypass)
+
+DO NOT put any Stripe keys in frontend code.
+
+==================================================================
+SECTION 3: DEV BYPASS (IMPLEMENT FIRST)
+==================================================================
+
+Create a helper function used in ALL relevant routes:
+
+function isDevBypass() {
+  return process.env.DEV_FULL_ACCESS === "true";
+}
+
+If isDevBypass() returns true:
+- Skip all authentication checks
+- Skip all payment checks
+- Always return full output (no truncation)
+- Allow generation without login
+
+This check must be THE FIRST THING in generate and output routes.
+If it's placed after other logic, it won't work.
+
+CRITICAL: DEV_FULL_ACCESS must NOT be set on production (textmd.xyz).
+
+==================================================================
+SECTION 4: TRUNCATION LOGIC
+==================================================================
+
+Partial output = the SHORTER of:
+- 65% of total output, OR
+- First 1000 words
+
+Function to compute partial:
+
+function getPartialOutput(fullText) {
+  const words = fullText.split(/\s+/);
+  const wordCount = words.length;
+  
+  const sixtyFivePercent = Math.floor(wordCount * 0.65);
+  const limit = Math.min(sixtyFivePercent, 1000);
+  
+  return words.slice(0, limit).join(' ');
+}
+
+==================================================================
+SECTION 5: GENERATE ROUTE
+==================================================================
+
+Endpoint: POST /api/generate (or whatever your generate endpoint is)
+
+Logic (in this exact order):
+
+1. If isDevBypass() → generate full output, return full output, done.
+
+2. Check if user is logged in (req.user exists).
+
+3. If NOT logged in:
+   - Generate the full output internally
+   - Compute partial output
+   - DO NOT store anything in database (or store with user_id = NULL and output_full = NULL)
+   - Return ONLY partial output to client
+   - Done.
+
+4. If logged in:
+   - Generate the full output
+   - Compute partial output
+   - Store in database:
+     - user_id = req.user.id
+     - output_full = full text
+     - output_preview = partial text
+     - created_at = now
+   - Check is_pro:
+     - If is_pro = true → return full output
+     - If is_pro = false → return partial output
+
+==================================================================
+SECTION 6: OUTPUT ROUTE (for retrieving past outputs)
+==================================================================
+
+Endpoint: GET /api/output/:id (or whatever your output retrieval endpoint is)
+
+Logic (in this exact order):
+
+1. If isDevBypass() → return output_full, done.
+
+2. Fetch the output record from database by id.
+
+3. If output has user_id = NULL:
+   - This was an anonymous generation
+   - Return output_preview only (or error, since full doesn't exist)
+
+4. If output has user_id:
+   - Check if requesting user matches user_id
+   - If no match → 403 Forbidden
+   - If match:
+     - Fetch user from database
+     - If user.is_pro = true → return output_full
+     - If user.is_pro = false → return output_preview
+
+==================================================================
+SECTION 7: STRIPE CHECKOUT SESSION CREATION
+==================================================================
+
+Endpoint: POST /api/stripe/create-checkout-session (or similar)
+
+CRITICAL: User MUST be logged in to create a checkout session.
+If not logged in → return 401.
+
+Create session like this:
+
+const session = await stripe.checkout.sessions.create({
+  mode: 'subscription',
+  payment_method_types: ['card'],
+  line_items: [{
+    price: process.env.STRIPE_PRICE_ID,
+    quantity: 1,
+  }],
+  metadata: {
+    userId: req.user.id.toString()  // CRITICAL: links payment to user
+  },
+  success_url: 'https://textmd.xyz/success?session_id={CHECKOUT_SESSION_ID}',
+  cancel_url: 'https://textmd.xyz/cancel',
+});
+
+Return session.url to frontend for redirect.
+
+CRITICAL: metadata.userId MUST be set. Without it, webhook cannot update the correct user.
+
+==================================================================
+SECTION 8: WEBHOOK HANDLER
+==================================================================
+
+Endpoint: POST /api/stripe/webhook
+
+This receives events from Stripe. You must verify the signature.
+
+const sig = req.headers['stripe-signature'];
+const event = stripe.webhooks.constructEvent(req.body, sig, process.env.STRIPE_WEBHOOK_SECRET);
+
+Handle these events:
+
+EVENT: checkout.session.completed
+- Extract userId from event.data.object.metadata.userId
+- Extract stripe_customer_id from event.data.object.customer
+- Extract stripe_subscription_id from event.data.object.subscription
+- Update database:
+  UPDATE users 
+  SET is_pro = true,
+      stripe_customer_id = $1,
+      stripe_subscription_id = $2
+  WHERE id = $3
+
+EVENT: customer.subscription.updated
+- Check event.data.object.status
+- If status = 'active' → set is_pro = true
+- If status = 'canceled' or 'unpaid' or 'past_due' → set is_pro = false
+- Find user by stripe_customer_id and update
+
+EVENT: customer.subscription.deleted
+- Find user by stripe_customer_id
+- Set is_pro = false
+
+CRITICAL: The webhook must use raw body for signature verification.
+If using Express, use express.raw() middleware for this route only.
+
+==================================================================
+SECTION 9: FRONTEND UI BEHAVIOR
+==================================================================
+
+If user is NOT logged in:
+- Show "Sign in with Google" button
+- After generation, show partial output
+- Show message: "Sign in and subscribe to see full output. Anonymous generations cannot be unlocked later."
+
+If user IS logged in but NOT paid (is_pro = false):
+- After generation, show partial output
+- Show "Upgrade - $1/month" button that triggers checkout
+
+If user IS logged in AND paid (is_pro = true):
+- Show full output
+- Allow access to past outputs in full
+
+==================================================================
+SECTION 10: ABSOLUTE PROHIBITIONS
+==================================================================
+
+DO NOT implement any of the following:
+- Anonymous session IDs or cookies to track outputs
+- "Claiming" anonymous outputs after login
+- Migrating anonymous outputs to a user account
+- Storing full output for anonymous users
+- Polling or race-condition workarounds
+- Any logic that unlocks a specific anonymous output after payment
+
+If a user generates while NOT logged in, that output is partial FOREVER.
+They must generate again while logged in to get unlockable output.
+
+==================================================================
+SECTION 11: SUCCESS PAGE BEHAVIOR
+==================================================================
+
+After successful payment, user lands on /success?session_id=xxx
+
+On this page:
+1. Optionally verify the session with backend (call Stripe to confirm paid)
+2. Redirect user to main app
+3. User should now see is_pro = true in their account
+4. Any NEW generations will return full output
+5. Any PAST generations (made while logged in) are now viewable in full
+
+DO NOT attempt to "recover" or "unlock" any output generated before login.
+
+==================================================================
+SECTION 12: TESTING CHECKLIST
+==================================================================
+
+Test each scenario:
+
+[ ] Logged out → generate → see partial only
+[ ] Logged out → generate → log in → still cannot see full for that output
+[ ] Logged in, unpaid → generate → see partial
+[ ] Logged in, unpaid → pay → refresh → now see full
+[ ] Logged in, paid → generate → see full immediately
+[ ] Logged in, paid → view past outputs → see full
+[ ] DEV_FULL_ACCESS=true in Replit → always full, no login needed
+[ ] DEV_FULL_ACCESS not set on production → normal gating works
+
+==================================================================
+SECTION 13: LOGGING (for debugging)
+==================================================================
+
+Add one log line at the top of generate and output routes:
+
+console.log('[ACCESS CHECK]', {
+  devBypass: isDevBypass(),
+  userId: req.user?.id || null,
+  isPro: req.user?.is_pro || null
+});
+
+This tells you immediately what state the system sees.
+
+==================================================================
+END OF INSTRUCTIONS
+==================================================================

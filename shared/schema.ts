@@ -10,7 +10,9 @@ export const users = pgTable("users", {
   email: text("email"), // Optional email field
   googleId: text("google_id").unique(), // Google OAuth ID
   profileImageUrl: text("profile_image_url"), // Google profile picture
-  isPro: boolean("is_pro").default(false).notNull(), // Pro status (managed manually)
+  isPro: boolean("is_pro").default(false).notNull(), // Pro status - SINGLE SOURCE OF TRUTH for payment
+  stripeCustomerId: text("stripe_customer_id"), // Stripe customer ID
+  stripeSubscriptionId: text("stripe_subscription_id"), // Stripe subscription ID
   createdAt: timestamp("created_at").defaultNow().notNull(),
   lastActiveAt: timestamp("last_active_at").defaultNow().notNull(),
 });
