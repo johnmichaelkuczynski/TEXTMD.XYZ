@@ -4757,6 +4757,7 @@ ${output}`;
       if (wordCount >= 1200) {
         console.log(`[OBJECTION-PROOF] Using outline-first approach for ${wordCount} words`);
         const { generateOutlineFirstObjectionProof } = await import('./services/outlineFirstObjectionProof');
+        const { rewriteWithGlobalCoherence } = await import('./services/coherenceMeter');
         
         const result = await generateOutlineFirstObjectionProof(
           originalText,
@@ -4769,6 +4770,25 @@ ${output}`;
             success: false,
             message: result.error || "Failed to generate objection-proof version"
           });
+        }
+        
+        // APPLY TEXT-LEVEL COHERENCE: Use Global Coherence State system to ensure
+        // coherence is maintained across the entire document
+        console.log(`[OBJECTION-PROOF] Applying text-level coherence with GCS system...`);
+        try {
+          const coherenceResult = await rewriteWithGlobalCoherence(
+            result.output,
+            "logical-cohesiveness", // Use logical cohesiveness for argumentative texts
+            "moderate", // Moderate aggressiveness preserves content while improving coherence
+            400 // Words per chunk
+          );
+          
+          // Use the coherence-enhanced version
+          result.output = coherenceResult.rewrittenText;
+          console.log(`[OBJECTION-PROOF] Text-level coherence applied successfully`);
+        } catch (coherenceError: any) {
+          // If coherence processing fails, continue with original output
+          console.warn(`[OBJECTION-PROOF] Coherence processing failed, using original: ${coherenceError.message}`);
         }
 
         // Build comprehensive header showing custom instructions, structure, and process
@@ -5025,6 +5045,24 @@ Provide:
           success: false,
           message: "No AI provider configured for objection-proof rewriting"
         });
+      }
+      
+      // APPLY TEXT-LEVEL COHERENCE for shorter texts too (if wordCount >= 300)
+      if (wordCount >= 300 && output.length > 0) {
+        console.log(`[OBJECTION-PROOF] Applying text-level coherence with GCS system...`);
+        try {
+          const { rewriteWithGlobalCoherence } = await import('./services/coherenceMeter');
+          const coherenceResult = await rewriteWithGlobalCoherence(
+            output,
+            "logical-cohesiveness",
+            "moderate",
+            400
+          );
+          output = coherenceResult.rewrittenText;
+          console.log(`[OBJECTION-PROOF] Text-level coherence applied successfully`);
+        } catch (coherenceError: any) {
+          console.warn(`[OBJECTION-PROOF] Coherence processing failed, using original: ${coherenceError.message}`);
+        }
       }
 
       // Add header only if not finalVersionOnly
