@@ -785,39 +785,27 @@ export async function registerRoutes(app: Express): Promise<Express> {
     }
   });
   
-  // Helper to ensure anonymous session exists
-  const ensureAnonSession = (req: Request, res: Response): string | null => {
-    let sessionId = req.cookies?.anon_session;
-    if (!sessionId && !req.isAuthenticated()) {
-      sessionId = uuidv4();
-      res.cookie('anon_session', sessionId, {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
-        maxAge: 30 * 24 * 60 * 60 * 1000,
-        sameSite: 'lax',
-      });
-    }
-    return sessionId || null;
-  };
-  
-  // Output management endpoints (for free-tier limiting)
+  // Output management endpoints (login required - OPTION A architecture)
   app.get("/api/output/:outputId", async (req: Request, res: Response) => {
     try {
+      if (!req.isAuthenticated() || !req.user) {
+        return res.status(401).json({ error: "Authentication required" });
+      }
+      
       const { outputId } = req.params;
       const user = req.user as any;
-      const isPro = user?.isPro || false;
-      const userId = user?.id || null;
-      const sessionId = ensureAnonSession(req, res);
+      const userId = user.id;
+      
+      // Refetch user from DB to get fresh is_pro status
+      const freshUser = await storage.getUser(userId);
+      const isPro = freshUser?.isPro || false;
       
       const output = await storage.getGeneratedOutput(outputId);
       if (!output) {
         return res.status(404).json({ error: "Output not found" });
       }
       
-      const isOwner = (userId && output.userId === userId) || 
-                      (sessionId && output.sessionId === sessionId);
-      
-      if (!isOwner) {
+      if (output.userId !== userId) {
         return res.status(403).json({ error: "Access denied" });
       }
       
@@ -836,11 +824,17 @@ export async function registerRoutes(app: Express): Promise<Express> {
   
   app.get("/api/output/:outputId/full", async (req: Request, res: Response) => {
     try {
+      if (!req.isAuthenticated() || !req.user) {
+        return res.status(401).json({ error: "Authentication required" });
+      }
+      
       const { outputId } = req.params;
       const user = req.user as any;
-      const isPro = user?.isPro || false;
-      const userId = user?.id || null;
-      const sessionId = ensureAnonSession(req, res);
+      const userId = user.id;
+      
+      // Refetch user from DB to get fresh is_pro status
+      const freshUser = await storage.getUser(userId);
+      const isPro = freshUser?.isPro || false;
       
       if (!isPro) {
         return res.status(403).json({ 
@@ -854,10 +848,7 @@ export async function registerRoutes(app: Express): Promise<Express> {
         return res.status(404).json({ error: "Output not found" });
       }
       
-      const isOwner = (userId && output.userId === userId) || 
-                      (sessionId && output.sessionId === sessionId);
-      
-      if (!isOwner) {
+      if (output.userId !== userId) {
         return res.status(403).json({ error: "Access denied" });
       }
       
@@ -874,53 +865,25 @@ export async function registerRoutes(app: Express): Promise<Express> {
     }
   });
   
-  app.post("/api/outputs/link-session", async (req: Request, res: Response) => {
+  // GET /api/output/latest - Returns most recent output for logged-in user
+  app.get("/api/output/latest", async (req: Request, res: Response) => {
     try {
       if (!req.isAuthenticated() || !req.user) {
         return res.status(401).json({ error: "Authentication required" });
       }
       
-      const userId = (req.user as any).id;
-      const sessionId = req.cookies?.anon_session;
-      
-      if (sessionId) {
-        await storage.linkSessionOutputsToUser(sessionId, userId);
-        // Don't clear the cookie - keep for future use
-      }
-      
-      res.json({ success: true });
-    } catch (error: any) {
-      console.error("Link session outputs error:", error);
-      res.status(500).json({ error: "Failed to link session outputs" });
-    }
-  });
-  
-  // GET /api/output/latest - Returns most recent output for logged-in user or session
-  app.get("/api/output/latest", async (req: Request, res: Response) => {
-    try {
       const user = req.user as any;
-      const isPro = user?.isPro || false;
-      const userId = user?.id || null;
-      const sessionId = req.cookies?.anon_session;
+      const userId = user.id;
       
-      let outputs: any[] = [];
+      // Refetch user from DB to get fresh is_pro status
+      const freshUser = await storage.getUser(userId);
+      const isPro = freshUser?.isPro || false;
       
-      // Try user outputs first, then session outputs
-      if (userId) {
-        outputs = await storage.getGeneratedOutputsByUser(userId);
-      }
-      if (outputs.length === 0 && sessionId) {
-        outputs = await storage.getGeneratedOutputsBySession(sessionId);
-      }
+      const latestOutput = await storage.getLatestOutputByUser(userId);
       
-      if (outputs.length === 0) {
+      if (!latestOutput) {
         return res.status(404).json({ error: "No outputs found" });
       }
-      
-      // Sort by createdAt descending and get the most recent
-      const latestOutput = outputs.sort((a, b) => 
-        new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
-      )[0];
       
       res.json({
         outputId: latestOutput.outputId,
@@ -969,9 +932,14 @@ export async function registerRoutes(app: Express): Promise<Express> {
     });
   });
 
-  // Quick analysis API endpoint with evaluation type support
+  // Quick analysis API endpoint with evaluation type support (LOGIN REQUIRED)
   app.post("/api/quick-analysis", async (req: Request, res: Response) => {
     try {
+      // OPTION A: Login required to generate
+      if (!req.isAuthenticated() || !req.user) {
+        return res.status(401).json({ error: "Authentication required to generate text. Please sign in with Google." });
+      }
+      
       const { text, provider = 'zhi1', evaluationType = 'intelligence' } = req.body;
 
       if (!text || typeof text !== 'string') {
@@ -980,11 +948,12 @@ export async function registerRoutes(app: Express): Promise<Express> {
         });
       }
 
-      // Check if user is logged in AND has Pro subscription
       const user = req.user as any;
-      const isPro = user?.isPro === true;
-      const userId = user?.id || null;
-      const sessionId = ensureAnonSession(req, res);
+      const userId = user.id;
+      
+      // Refetch user from DB for fresh is_pro status
+      const freshUser = await storage.getUser(userId);
+      const isPro = freshUser?.isPro || false;
 
       // Validate evaluation type
       const validTypes = ['intelligence', 'originality', 'cogency', 'overall_quality'];
@@ -995,7 +964,7 @@ export async function registerRoutes(app: Express): Promise<Express> {
       }
 
       console.log(`Starting quick ${evaluationType} analysis with ${provider}...`);
-      console.log(`User: ${userId ? 'logged in' : 'anonymous'}, Pro: ${isPro}`);
+      console.log(`User: ${userId}, Pro: ${isPro}`);
       
       const { performQuickAnalysis } = await import('./services/quickAnalysis');
       const result = await performQuickAnalysis(text, provider, evaluationType);
@@ -1007,7 +976,6 @@ export async function registerRoutes(app: Express): Promise<Express> {
         'quick-analysis',
         isPro,
         userId,
-        sessionId,
         { provider, evaluationType }
       );
       
@@ -1064,9 +1032,14 @@ export async function registerRoutes(app: Express): Promise<Express> {
     }
   });
 
-  // INTELLIGENT REWRITE - Maximize intelligence scores on protocol questions
+  // INTELLIGENT REWRITE - Maximize intelligence scores on protocol questions (LOGIN REQUIRED)
   app.post("/api/intelligent-rewrite", async (req: Request, res: Response) => {
     try {
+      // OPTION A: Login required to generate
+      if (!req.isAuthenticated() || !req.user) {
+        return res.status(401).json({ error: "Authentication required to generate text. Please sign in with Google." });
+      }
+      
       const { originalText, customInstructions, provider = 'zhi1', useExternalKnowledge = false } = req.body;
 
       if (!originalText || typeof originalText !== 'string') {
@@ -1075,17 +1048,18 @@ export async function registerRoutes(app: Express): Promise<Express> {
         });
       }
 
-      // Check if user is logged in AND has Pro subscription
       const user = req.user as any;
-      const isPro = user?.isPro === true;
-      const userId = user?.id || null;
-      const sessionId = ensureAnonSession(req, res);
+      const userId = user.id;
+      
+      // Refetch user from DB for fresh is_pro status
+      const freshUser = await storage.getUser(userId);
+      const isPro = freshUser?.isPro || false;
 
       console.log(`Starting intelligent rewrite with ${provider}...`);
       console.log(`Original text length: ${originalText.length} characters`);
       console.log(`Custom instructions: ${customInstructions || 'None'}`);
       console.log(`External knowledge: ${useExternalKnowledge ? 'ENABLED' : 'DISABLED'}`);
-      console.log(`User: ${userId ? 'logged in' : 'anonymous'}, Pro: ${isPro}`);
+      console.log(`User: ${userId}, Pro: ${isPro}`);
       
       const { performIntelligentRewrite } = await import('./services/intelligentRewrite');
       const fullResult = await performIntelligentRewrite({
@@ -1101,7 +1075,6 @@ export async function registerRoutes(app: Express): Promise<Express> {
         'intelligent-rewrite',
         isPro,
         userId,
-        sessionId,
         { provider, customInstructions, useExternalKnowledge }
       );
       
@@ -1127,9 +1100,14 @@ export async function registerRoutes(app: Express): Promise<Express> {
     }
   });
 
-  // COMPREHENSIVE 4-PHASE EVALUATION using exact protocol with evaluation type support
+  // COMPREHENSIVE 4-PHASE EVALUATION using exact protocol with evaluation type support (LOGIN REQUIRED)
   app.post("/api/cognitive-evaluate", async (req: Request, res: Response) => {
     try {
+      // OPTION A: Login required to generate
+      if (!req.isAuthenticated() || !req.user) {
+        return res.status(401).json({ error: "Authentication required to generate text. Please sign in with Google." });
+      }
+      
       const { content, provider = 'zhi1', evaluationType = 'intelligence' } = req.body;
 
       if (!content || typeof content !== 'string') {
@@ -1138,11 +1116,12 @@ export async function registerRoutes(app: Express): Promise<Express> {
         });
       }
 
-      // Check if user is logged in AND has Pro subscription
       const user = req.user as any;
-      const isPro = user?.isPro === true;
-      const userId = user?.id || null;
-      const sessionId = ensureAnonSession(req, res);
+      const userId = user.id;
+      
+      // Refetch user from DB for fresh is_pro status
+      const freshUser = await storage.getUser(userId);
+      const isPro = freshUser?.isPro || false;
 
       // Validate evaluation type
       const validTypes = ['intelligence', 'originality', 'cogency', 'overall_quality'];
@@ -1156,7 +1135,7 @@ export async function registerRoutes(app: Express): Promise<Express> {
       const { executeFourPhaseProtocol } = await import('./services/fourPhaseProtocol');
 
       console.log(`EXACT 4-PHASE ${evaluationType.toUpperCase()} EVALUATION: Analyzing ${content.length} characters with protocol`);
-      console.log(`User: ${userId ? 'logged in' : 'anonymous'}, Pro: ${isPro}`);
+      console.log(`User: ${userId}, Pro: ${isPro}`);
       
       const evaluation = await executeFourPhaseProtocol(
         content, 
@@ -1170,7 +1149,6 @@ export async function registerRoutes(app: Express): Promise<Express> {
         'cognitive-evaluate',
         isPro,
         userId,
-        sessionId,
         { provider, evaluationType, overallScore: evaluation.overallScore }
       );
 
@@ -2624,23 +2602,29 @@ PROVIDE A FINAL VALIDATED SCORE OUT OF 100 IN THE FORMAT: SCORE: X/100
     }
   });
 
-  // Main rewrite endpoint - GPT Bypass Humanizer
+  // Main rewrite endpoint - GPT Bypass Humanizer (LOGIN REQUIRED)
   app.post("/api/rewrite", async (req, res) => {
     try {
+      // OPTION A: Login required to generate
+      if (!req.isAuthenticated() || !req.user) {
+        return res.status(401).json({ error: "Authentication required to generate text. Please sign in with Google." });
+      }
+      
       const rewriteRequest: RewriteRequest = req.body;
       
-      // Check if user is logged in AND has Pro subscription
       const user = req.user as any;
-      const isPro = user?.isPro === true;
-      const userId = user?.id || null;
-      const sessionId = ensureAnonSession(req, res);
+      const userId = user.id;
+      
+      // Refetch user from DB for fresh is_pro status
+      const freshUser = await storage.getUser(userId);
+      const isPro = freshUser?.isPro || false;
       
       // Validate request
       if (!rewriteRequest.inputText || !rewriteRequest.provider) {
         return res.status(400).json({ message: "Input text and provider are required" });
       }
 
-      console.log(`Rewrite request - User: ${userId ? 'logged in' : 'anonymous'}, Pro: ${isPro}`);
+      console.log(`Rewrite request - User: ${userId}, Pro: ${isPro}`);
 
       // Analyze input text
       const inputAnalysis = await gptZeroService.analyzeText(rewriteRequest.inputText);
@@ -2683,7 +2667,6 @@ PROVIDE A FINAL VALIDATED SCORE OUT OF 100 IN THE FORMAT: SCORE: X/100
           'rewrite',
           isPro,
           userId,
-          sessionId,
           { provider: rewriteRequest.provider, jobId: rewriteJob.id }
         );
 
@@ -3163,16 +3146,22 @@ Structural understanding is always understanding of relationships. Observational
     }
   });
 
-  // Text Model Validator endpoint
+  // Text Model Validator endpoint (LOGIN REQUIRED)
   app.post("/api/text-model-validator", async (req: Request, res: Response) => {
     try {
+      // OPTION A: Login required to generate
+      if (!req.isAuthenticated() || !req.user) {
+        return res.status(401).json({ error: "Authentication required to generate text. Please sign in with Google." });
+      }
+      
       const { text, mode, targetDomain, fidelityLevel, mathFramework, constraintType, rigorLevel, customInstructions, truthMapping, mathTruthMapping, literalTruth, llmProvider } = req.body;
 
-      // Check if user is logged in AND has Pro subscription
       const user = req.user as any;
-      const isPro = user?.isPro === true;
-      const userId = user?.id || null;
-      const sessionId = ensureAnonSession(req, res);
+      const userId = user.id;
+      
+      // Refetch user from DB for fresh is_pro status
+      const freshUser = await storage.getUser(userId);
+      const isPro = freshUser?.isPro || false;
 
       if (!text || !mode) {
         return res.status(400).json({ 
@@ -3182,7 +3171,7 @@ Structural understanding is always understanding of relationships. Observational
       }
 
       console.log(`Text Model Validator - Mode: ${mode}, Target Domain: ${targetDomain || 'not specified'}`);
-      console.log(`User: ${userId ? 'logged in' : 'anonymous'}, Pro: ${isPro}`);
+      console.log(`User: ${userId}, Pro: ${isPro}`);
 
       // Build the prompt based on the mode
       let systemPrompt = "";
@@ -3212,7 +3201,6 @@ Structural understanding is always understanding of relationships. Observational
               'text-model-validator',
               isPro,
               userId,
-              sessionId,
               { mode, reconstructionMethod: 'position-list' }
             );
             
@@ -3346,7 +3334,6 @@ ${'═'.repeat(60)}
               'text-model-validator',
               isPro,
               userId,
-              sessionId,
               { mode, reconstructionMethod: 'outline-first' }
             );
             
@@ -3421,7 +3408,6 @@ ${'═'.repeat(60)}
               'text-model-validator',
               isPro,
               userId,
-              sessionId,
               { mode, reconstructionMethod: 'cross-chunk' }
             );
             
@@ -4346,7 +4332,6 @@ Model: ${providerLabels[provider] || provider}`;
         'text-model-validator',
         isPro,
         userId,
-        sessionId,
         { mode, targetDomain, fidelityLevel }
       );
 
