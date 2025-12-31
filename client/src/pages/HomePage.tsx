@@ -824,6 +824,8 @@ DOES THE AUTHOR USE OTHER AUTHORS TO DEVELOP HIS IDEAS OR TO CLOAK HIS OWN LACK 
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
         let buffer = '';
+        let currentEventType = '';
+        let receivedOutput = false;
         
         while (true) {
           const { done, value } = await reader.read();
@@ -835,31 +837,56 @@ DOES THE AUTHOR USE OTHER AUTHORS TO DEVELOP HIS IDEAS OR TO CLOAK HIS OWN LACK 
           
           for (const line of lines) {
             if (line.startsWith('event: ')) {
-              const eventType = line.slice(7);
+              currentEventType = line.slice(7).trim();
               continue;
             }
             if (line.startsWith('data: ')) {
               try {
                 const data = JSON.parse(line.slice(6));
-                if (data.stage) {
+                
+                // Handle progress events
+                if (currentEventType === 'progress' && data.stage) {
                   setValidatorProgress(`${data.stage} (${data.current}/${data.total})`);
                 }
-                if (data.output) {
+                
+                // Handle complete event
+                if (currentEventType === 'complete' && data.output) {
                   setValidatorOutput(stripMarkdown(data.output));
                   setObjectionsInputText(stripMarkdown(data.output));
+                  receivedOutput = true;
                   toast({
                     title: "Validation Complete!",
                     description: `Text validated using ${mode} mode.`,
                   });
                 }
-                if (data.message) {
+                
+                // Handle error event
+                if (currentEventType === 'error' && data.message) {
                   throw new Error(data.message);
                 }
-              } catch (parseError) {
-                // Skip parse errors for partial data
+                
+                // Also handle data.output without event type (backwards compatibility)
+                if (!currentEventType && data.output) {
+                  setValidatorOutput(stripMarkdown(data.output));
+                  setObjectionsInputText(stripMarkdown(data.output));
+                  receivedOutput = true;
+                  toast({
+                    title: "Validation Complete!",
+                    description: `Text validated using ${mode} mode.`,
+                  });
+                }
+                
+                currentEventType = ''; // Reset after processing data
+              } catch (parseError: any) {
+                console.error('SSE parse error:', parseError.message);
               }
             }
           }
+        }
+        
+        // If stream ended without output, log warning
+        if (!receivedOutput) {
+          console.warn('SSE stream ended without receiving output');
         }
       } else {
         // Regular JSON response
