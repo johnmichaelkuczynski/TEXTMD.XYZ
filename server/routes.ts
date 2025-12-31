@@ -3150,14 +3150,18 @@ Structural understanding is always understanding of relationships. Observational
   app.post("/api/text-model-validator", async (req: Request, res: Response) => {
     try {
       // OPTION A: Login required to generate
-      if (!req.isAuthenticated() || !req.user) {
+      // Allow internal batch calls with userId passed directly
+      const internalUserId = req.body._internalUserId;
+      const isInternalCall = internalUserId && req.headers['x-internal-batch'] === 'true';
+      
+      if (!isInternalCall && (!req.isAuthenticated() || !req.user)) {
         return res.status(401).json({ error: "Authentication required to generate text. Please sign in with Google." });
       }
       
       const { text, mode, targetDomain, fidelityLevel, mathFramework, constraintType, rigorLevel, customInstructions, truthMapping, mathTruthMapping, literalTruth, llmProvider } = req.body;
 
       const user = req.user as any;
-      const userId = user.id;
+      const userId = isInternalCall ? internalUserId : user.id;
       
       // Refetch user from DB for fresh is_pro status
       const freshUser = await storage.getUser(userId);
@@ -4357,6 +4361,11 @@ Model: ${providerLabels[provider] || provider}`;
   // Text Model Validator BATCH endpoint - Run multiple modes at once
   app.post("/api/text-model-validator/batch", async (req: Request, res: Response) => {
     try {
+      // OPTION A: Login required to generate
+      if (!req.isAuthenticated() || !req.user) {
+        return res.status(401).json({ error: "Authentication required to generate text. Please sign in with Google." });
+      }
+
       const { text, modes, targetDomain, fidelityLevel, mathFramework, constraintType, rigorLevel, customInstructions, truthMapping, mathTruthMapping, literalTruth, llmProvider } = req.body;
 
       if (!text || !modes || !Array.isArray(modes) || modes.length === 0) {
@@ -4375,15 +4384,20 @@ Model: ${providerLabels[provider] || provider}`;
         });
       }
 
-      console.log(`[Text Model Validator Batch] Processing ${modes.length} modes: ${modes.join(', ')}`);
+      const user = req.user as any;
+      const userId = user.id;
+      console.log(`[Text Model Validator Batch] Processing ${modes.length} modes for user ${userId}: ${modes.join(', ')}`);
 
       // Process modes in parallel with concurrency limit
       const processMode = async (mode: string): Promise<{ mode: string; success: boolean; output?: string; error?: string }> => {
         try {
-          // Make internal request to the single-mode endpoint
+          // Make internal request to the single-mode endpoint with userId bypass
           const response = await fetch(`http://localhost:5000/api/text-model-validator`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: { 
+              'Content-Type': 'application/json',
+              'X-Internal-Batch': 'true'
+            },
             body: JSON.stringify({
               text,
               mode,
@@ -4396,7 +4410,8 @@ Model: ${providerLabels[provider] || provider}`;
               truthMapping,
               mathTruthMapping,
               literalTruth,
-              llmProvider
+              llmProvider,
+              _internalUserId: userId
             })
           });
 
@@ -4438,9 +4453,14 @@ Model: ${providerLabels[provider] || provider}`;
     }
   });
 
-  // Objections Function - Generate 25 objections and counter-arguments
+  // Objections Function - Generate 25 objections and counter-arguments (LOGIN REQUIRED)
   app.post("/api/text-model-validator/objections", async (req: Request, res: Response) => {
     try {
+      // OPTION A: Login required to generate
+      if (!req.isAuthenticated() || !req.user) {
+        return res.status(401).json({ error: "Authentication required to generate text. Please sign in with Google." });
+      }
+
       const { 
         bottomlineOutput,
         audience,
@@ -4609,9 +4629,14 @@ ${output}`;
     }
   });
 
-  // Objection-Proof Rewrite - Rewrite text to be invulnerable to identified objections
+  // Objection-Proof Rewrite - Rewrite text to be invulnerable to identified objections (LOGIN REQUIRED)
   app.post("/api/objection-proof-rewrite", async (req: Request, res: Response) => {
     try {
+      // OPTION A: Login required to generate
+      if (!req.isAuthenticated() || !req.user) {
+        return res.status(401).json({ error: "Authentication required to generate text. Please sign in with Google." });
+      }
+
       const { originalText, objectionsOutput, customInstructions, finalVersionOnly } = req.body;
 
       if (!originalText) {
@@ -4935,9 +4960,14 @@ ${output}`;
     }
   });
 
-  // Refine Output - Adjust word count and/or apply custom instructions
+  // Refine Output - Adjust word count and/or apply custom instructions (LOGIN REQUIRED)
   app.post("/api/refine-output", async (req: Request, res: Response) => {
     try {
+      // OPTION A: Login required to generate
+      if (!req.isAuthenticated() || !req.user) {
+        return res.status(401).json({ error: "Authentication required to generate text. Please sign in with Google." });
+      }
+
       const { text, targetWordCount, customInstructions } = req.body;
 
       if (!text) {
