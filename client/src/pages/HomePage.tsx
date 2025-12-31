@@ -367,6 +367,30 @@ DOES THE AUTHOR USE OTHER AUTHORS TO DEVELOP HIS IDEAS OR TO CLOAK HIS OWN LACK 
     loadStylePresets();
   }, []);
 
+  // Restore output after billing success redirect
+  useEffect(() => {
+    const restoredOutputStr = sessionStorage.getItem('restored_output');
+    if (restoredOutputStr) {
+      try {
+        const restored = JSON.parse(restoredOutputStr);
+        if (restored.content) {
+          setValidatorOutput(stripMarkdown(restored.content));
+          setValidatorMode("reconstruction");
+          toast({
+            title: "Output Restored",
+            description: restored.isTruncated 
+              ? "Your output was restored (still truncated - upgrade may be processing)"
+              : "Your full, untruncated output is now available!",
+          });
+        }
+      } catch (e) {
+        console.error('Failed to restore output:', e);
+      } finally {
+        sessionStorage.removeItem('restored_output');
+      }
+    }
+  }, [toast]);
+
   // GPT Bypass Humanizer Functions - Following Exact Protocol
   
   // Debounce function for delayed execution
@@ -816,6 +840,10 @@ DOES THE AUTHOR USE OTHER AUTHORS TO DEVELOP HIS IDEAS OR TO CLOAK HIS OWN LACK 
       if (data.success && data.output) {
         setValidatorOutput(stripMarkdown(data.output));
         setObjectionsInputText(stripMarkdown(data.output));
+        // Save outputId to localStorage for persistence across redirects
+        if (data.outputId) {
+          localStorage.setItem('last_output_id', data.outputId);
+        }
         toast({
           title: "Validation Complete!",
           description: `Text validated using ${mode} mode. Reconstructed text has been loaded into the Objections input.`,

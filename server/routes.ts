@@ -823,13 +823,53 @@ export async function registerRoutes(app: Express): Promise<Express> {
       
       if (sessionId) {
         await storage.linkSessionOutputsToUser(sessionId, userId);
-        res.clearCookie('anon_session');
+        // Don't clear the cookie - keep for future use
       }
       
       res.json({ success: true });
     } catch (error: any) {
       console.error("Link session outputs error:", error);
       res.status(500).json({ error: "Failed to link session outputs" });
+    }
+  });
+  
+  // GET /api/output/latest - Returns most recent output for logged-in user or session
+  app.get("/api/output/latest", async (req: Request, res: Response) => {
+    try {
+      const user = req.user as any;
+      const isPro = user?.isPro || false;
+      const userId = user?.id || null;
+      const sessionId = req.cookies?.anon_session;
+      
+      let outputs: any[] = [];
+      
+      // Try user outputs first, then session outputs
+      if (userId) {
+        outputs = await storage.getGeneratedOutputsByUser(userId);
+      }
+      if (outputs.length === 0 && sessionId) {
+        outputs = await storage.getGeneratedOutputsBySession(sessionId);
+      }
+      
+      if (outputs.length === 0) {
+        return res.status(404).json({ error: "No outputs found" });
+      }
+      
+      // Sort by createdAt descending and get the most recent
+      const latestOutput = outputs.sort((a, b) => 
+        new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+      )[0];
+      
+      res.json({
+        outputId: latestOutput.outputId,
+        outputType: latestOutput.outputType,
+        content: isPro ? latestOutput.outputFull : latestOutput.outputPreview,
+        isTruncated: isPro ? false : latestOutput.isTruncated,
+        createdAt: latestOutput.createdAt,
+      });
+    } catch (error: any) {
+      console.error("Get latest output error:", error);
+      res.status(500).json({ error: "Failed to get latest output" });
     }
   });
   
