@@ -597,6 +597,7 @@ export async function registerRoutes(app: Express): Promise<Express> {
         success_url: 'https://textmd.xyz/billing/success',
         cancel_url: 'https://textmd.xyz/billing/cancel',
         customer_email: userEmail,
+        client_reference_id: userId.toString(),
         metadata: {
           userId: userId.toString(),
         },
@@ -629,10 +630,15 @@ export async function registerRoutes(app: Express): Promise<Express> {
     }
     
     try {
+      console.log(`[Stripe Webhook] Received event: ${event.type}`);
+      
       switch (event.type) {
         case 'checkout.session.completed': {
           const session = event.data.object as any;
-          let userId = parseInt(session.metadata?.userId);
+          console.log(`[Stripe Webhook] checkout.session.completed - client_reference_id: ${session.client_reference_id}, metadata.userId: ${session.metadata?.userId}, customer: ${session.customer}`);
+          
+          // Get userId from client_reference_id first, then metadata
+          let userId = parseInt(session.client_reference_id) || parseInt(session.metadata?.userId);
           
           // Fallback: look up user by Stripe customer ID if metadata is missing
           if (!userId && session.customer) {
@@ -641,45 +647,60 @@ export async function registerRoutes(app: Express): Promise<Express> {
           }
           
           if (userId) {
+            // Update user with stripe_customer_id (critical for subscription lookups)
             await storage.updateUserSubscription(userId, {
               stripeCustomerId: session.customer as string,
-              stripeSubscriptionId: session.subscription as string,
-              subscriptionStatus: 'active',
-              isPro: true,
             });
-            console.log(`User ${userId} subscription activated`);
+            console.log(`[Stripe Webhook] User ${userId} linked to Stripe customer ${session.customer}`);
           } else {
-            console.log(`Webhook: Could not find user for checkout session ${session.id}`);
+            console.log(`[Stripe Webhook] Could not find user for checkout session ${session.id}`);
           }
           break;
         }
         
+        case 'customer.subscription.created':
         case 'customer.subscription.updated': {
           const subscription = event.data.object as any;
+          console.log(`[Stripe Webhook] ${event.type} - customer: ${subscription.customer}, status: ${subscription.status}, subscription_id: ${subscription.id}`);
+          
+          // First try metadata
           let userId = parseInt(subscription.metadata?.userId);
           
-          // Fallback: look up user by Stripe customer ID if metadata is missing
+          // Fallback: look up user by Stripe customer ID
           if (!userId && subscription.customer) {
             const user = await storage.getUserByStripeCustomerId(subscription.customer);
-            if (user) userId = user.id;
+            if (user) {
+              userId = user.id;
+              console.log(`[Stripe Webhook] Found user ${userId} by stripe_customer_id ${subscription.customer}`);
+            }
           }
           
           if (userId) {
             const status = subscription.status;
+            const paidUntil = subscription.current_period_end 
+              ? new Date(subscription.current_period_end * 1000) 
+              : null;
+            
             await storage.updateUserSubscription(userId, {
+              stripeSubscriptionId: subscription.id,
               subscriptionStatus: status,
               isPro: status === 'active',
+              paidUntil: paidUntil,
             });
-            console.log(`User ${userId} subscription updated to ${status}`);
+            console.log(`[Stripe Webhook] User ${userId} subscription updated: status=${status}, is_pro=${status === 'active'}, paid_until=${paidUntil?.toISOString()}`);
+          } else {
+            console.log(`[Stripe Webhook] Could not find user for subscription ${subscription.id}, customer ${subscription.customer}`);
           }
           break;
         }
         
         case 'customer.subscription.deleted': {
           const subscription = event.data.object as any;
+          console.log(`[Stripe Webhook] customer.subscription.deleted - customer: ${subscription.customer}, subscription_id: ${subscription.id}`);
+          
           let userId = parseInt(subscription.metadata?.userId);
           
-          // Fallback: look up user by Stripe customer ID if metadata is missing
+          // Fallback: look up user by Stripe customer ID
           if (!userId && subscription.customer) {
             const user = await storage.getUserByStripeCustomerId(subscription.customer);
             if (user) userId = user.id;
@@ -689,11 +710,15 @@ export async function registerRoutes(app: Express): Promise<Express> {
             await storage.updateUserSubscription(userId, {
               subscriptionStatus: 'canceled',
               isPro: false,
+              paidUntil: null,
             });
-            console.log(`User ${userId} subscription canceled`);
+            console.log(`[Stripe Webhook] User ${userId} subscription canceled`);
           }
           break;
         }
+        
+        default:
+          console.log(`[Stripe Webhook] Unhandled event type: ${event.type}`);
       }
       
       res.json({ received: true });
@@ -710,16 +735,53 @@ export async function registerRoutes(app: Express): Promise<Express> {
         return res.status(401).json({ error: "Authentication required" });
       }
       
-      const user = req.user as any;
+      // Refetch user from DB to get latest subscription state (after webhook)
+      const userId = (req.user as any).id;
+      const freshUser = await storage.getUser(userId);
+      
+      if (!freshUser) {
+        return res.status(404).json({ error: "User not found" });
+      }
       
       res.json({
-        subscriptionStatus: user.subscriptionStatus || null,
-        isPro: user.isPro || false,
-        stripeCustomerId: user.stripeCustomerId || null,
+        subscriptionStatus: freshUser.subscriptionStatus || null,
+        isPro: freshUser.isPro || false,
+        is_pro: freshUser.isPro || false, // snake_case for frontend polling
+        stripeCustomerId: freshUser.stripeCustomerId || null,
       });
     } catch (error: any) {
       console.error("Billing status error:", error);
       res.status(500).json({ error: "Failed to get billing status" });
+    }
+  });
+  
+  // Debug endpoint to check user's billing state
+  app.get("/api/debug/me", async (req: Request, res: Response) => {
+    try {
+      if (!req.isAuthenticated() || !req.user) {
+        return res.status(401).json({ error: "Authentication required" });
+      }
+      
+      const userId = (req.user as any).id;
+      const user = await storage.getUser(userId);
+      
+      if (!user) {
+        return res.status(404).json({ error: "User not found" });
+      }
+      
+      res.json({
+        id: user.id,
+        username: user.username,
+        email: user.email,
+        is_pro: user.isPro,
+        subscription_status: user.subscriptionStatus,
+        stripe_customer_id: user.stripeCustomerId,
+        stripe_subscription_id: user.stripeSubscriptionId,
+        paid_until: user.paidUntil,
+      });
+    } catch (error: any) {
+      console.error("Debug/me error:", error);
+      res.status(500).json({ error: "Failed to get user data" });
     }
   });
   

@@ -61,6 +61,7 @@ export interface IStorage {
     stripeSubscriptionId?: string;
     subscriptionStatus?: string;
     isPro?: boolean;
+    paidUntil?: Date | null;
   }): Promise<User>;
   
   // Generated outputs operations (for free-tier limiting)
@@ -219,12 +220,14 @@ export class DatabaseStorage implements IStorage {
     stripeSubscriptionId?: string;
     subscriptionStatus?: string;
     isPro?: boolean;
+    paidUntil?: Date | null;
   }): Promise<User> {
     const updateData: any = {};
     if (data.stripeCustomerId !== undefined) updateData.stripeCustomerId = data.stripeCustomerId;
     if (data.stripeSubscriptionId !== undefined) updateData.stripeSubscriptionId = data.stripeSubscriptionId;
     if (data.subscriptionStatus !== undefined) updateData.subscriptionStatus = data.subscriptionStatus;
     if (data.isPro !== undefined) updateData.isPro = data.isPro;
+    if (data.paidUntil !== undefined) updateData.paidUntil = data.paidUntil;
     
     const [updated] = await db
       .update(users)

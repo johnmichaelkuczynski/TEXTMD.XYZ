@@ -14,6 +14,7 @@ export const users = pgTable("users", {
   stripeSubscriptionId: text("stripe_subscription_id"), // Stripe subscription ID
   subscriptionStatus: text("subscription_status"), // active, canceled, past_due, etc.
   isPro: boolean("is_pro").default(false).notNull(), // Pro subscription status
+  paidUntil: timestamp("paid_until"), // Subscription period end date
   createdAt: timestamp("created_at").defaultNow().notNull(),
   lastActiveAt: timestamp("last_active_at").defaultNow().notNull(),
 });
