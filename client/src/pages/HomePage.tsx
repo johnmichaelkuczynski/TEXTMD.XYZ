@@ -370,31 +370,53 @@ DOES THE AUTHOR USE OTHER AUTHORS TO DEVELOP HIS IDEAS OR TO CLOAK HIS OWN LACK 
   // Restore output on page load (after Google login, page refresh, billing success, etc.)
   useEffect(() => {
     const restoreOutput = async () => {
+      const savedOutputId = localStorage.getItem('last_output_id');
+      
       // First check sessionStorage (from billing success redirect)
       const restoredOutputStr = sessionStorage.getItem('restored_output');
       if (restoredOutputStr) {
+        sessionStorage.removeItem('restored_output');
         try {
           const restored = JSON.parse(restoredOutputStr);
+          
+          // If content is truncated, always refetch from API to get latest Pro status
+          if (restored.isTruncated && savedOutputId) {
+            console.log('[Restore] Cached content is truncated, refetching from API...');
+            const response = await fetch(`/api/output/${savedOutputId}`, {
+              credentials: 'include'
+            });
+            if (response.ok) {
+              const data = await response.json();
+              if (data.content) {
+                setValidatorOutput(stripMarkdown(data.content));
+                setValidatorMode("reconstruction");
+                toast({
+                  title: "Output Restored",
+                  description: data.isTruncated 
+                    ? "Your output was restored. Your Pro upgrade may still be processing - please refresh."
+                    : "Your full, untruncated output is now available!",
+                });
+                return;
+              }
+            }
+          }
+          
+          // Use cached content if not truncated
           if (restored.content) {
             setValidatorOutput(stripMarkdown(restored.content));
             setValidatorMode("reconstruction");
             toast({
               title: "Output Restored",
-              description: restored.isTruncated 
-                ? "Your output was restored (still truncated - upgrade may be processing)"
-                : "Your full, untruncated output is now available!",
+              description: "Your full, untruncated output is now available!",
             });
           }
         } catch (e) {
           console.error('Failed to restore output from sessionStorage:', e);
-        } finally {
-          sessionStorage.removeItem('restored_output');
         }
-        return; // Don't fetch from API if we already restored from sessionStorage
+        return;
       }
       
       // Check localStorage for saved output_id (survives Google login redirect)
-      const savedOutputId = localStorage.getItem('last_output_id');
       if (savedOutputId) {
         try {
           const response = await fetch(`/api/output/${savedOutputId}`, {
