@@ -15,12 +15,25 @@ export function isDevBypass(req: Request): boolean {
   const origin = req.headers.origin || '';
   const referer = req.headers.referer || '';
   
+  // LOG ALL HEADERS FOR DEBUGGING
+  console.log('[DEV_BYPASS] Headers:', JSON.stringify({
+    host,
+    xForwardedHost,
+    origin,
+    referer,
+    NODE_ENV: process.env.NODE_ENV,
+    DEV_FULL_ACCESS: process.env.DEV_FULL_ACCESS,
+    REPLIT_DEPLOYMENT: process.env.REPLIT_DEPLOYMENT
+  }));
+  
   // PRODUCTION CHECK: Never bypass on production domain (check all possible sources)
   const isProduction = 
     host.includes('textmd.xyz') || 
     xForwardedHost.includes('textmd.xyz') ||
     origin.includes('textmd.xyz') ||
     referer.includes('textmd.xyz');
+  
+  console.log('[DEV_BYPASS] isProduction:', isProduction);
   
   if (isProduction) {
     console.log('[DEV_BYPASS] Production detected, returning false');
