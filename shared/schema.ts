@@ -10,11 +10,7 @@ export const users = pgTable("users", {
   email: text("email"), // Optional email field
   googleId: text("google_id").unique(), // Google OAuth ID
   profileImageUrl: text("profile_image_url"), // Google profile picture
-  stripeCustomerId: text("stripe_customer_id"), // Stripe customer ID
-  stripeSubscriptionId: text("stripe_subscription_id"), // Stripe subscription ID
-  subscriptionStatus: text("subscription_status"), // active, canceled, past_due, etc.
-  isPro: boolean("is_pro").default(false).notNull(), // Pro subscription status
-  paidUntil: timestamp("paid_until"), // Subscription period end date
+  isPro: boolean("is_pro").default(false).notNull(), // Pro status (managed manually)
   createdAt: timestamp("created_at").defaultNow().notNull(),
   lastActiveAt: timestamp("last_active_at").defaultNow().notNull(),
 });
