@@ -54,8 +54,10 @@ export interface IStorage {
   updateRewriteJob(id: number, updates: Partial<RewriteJob>): Promise<RewriteJob>;
   listRewriteJobs(): Promise<RewriteJob[]>;
   
-  // Pro status operations
+  // Pro status and Stripe operations
   updateUserProStatus(userId: number, isPro: boolean): Promise<User>;
+  updateUserStripeInfo(userId: number, stripeCustomerId: string, stripeSubscriptionId: string, isPro: boolean): Promise<User>;
+  getUserByStripeCustomerId(stripeCustomerId: string): Promise<User | undefined>;
   
   // Generated outputs operations (for free-tier limiting)
   createGeneratedOutput(output: InsertGeneratedOutput): Promise<GeneratedOutput>;
@@ -198,7 +200,7 @@ export class DatabaseStorage implements IStorage {
       .limit(50);
   }
 
-  // Pro status operations
+  // Pro status and Stripe operations
   async updateUserProStatus(userId: number, isPro: boolean): Promise<User> {
     const [updated] = await db
       .update(users)
@@ -206,6 +208,20 @@ export class DatabaseStorage implements IStorage {
       .where(eq(users.id, userId))
       .returning();
     return updated;
+  }
+  
+  async updateUserStripeInfo(userId: number, stripeCustomerId: string, stripeSubscriptionId: string, isPro: boolean): Promise<User> {
+    const [updated] = await db
+      .update(users)
+      .set({ stripeCustomerId, stripeSubscriptionId, isPro })
+      .where(eq(users.id, userId))
+      .returning();
+    return updated;
+  }
+  
+  async getUserByStripeCustomerId(stripeCustomerId: string): Promise<User | undefined> {
+    const [user] = await db.select().from(users).where(eq(users.stripeCustomerId, stripeCustomerId));
+    return user || undefined;
   }
   
   // Generated outputs operations (for free-tier limiting)
