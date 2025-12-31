@@ -37,17 +37,74 @@ interface DefenseFormat {
 
 export function isPositionList(text: string): boolean {
   const lines = text.trim().split('\n').filter(l => l.trim().length > 0);
-  if (lines.length < 10) return false;
+  if (lines.length < 3) return false;
 
+  // Count pipe-delimited lines across the entire text
   let pipeDelimitedCount = 0;
-  for (const line of lines.slice(0, Math.min(20, lines.length))) {
-    const parts = line.split('|').map(p => p.trim());
+  let instructionLines = 0;
+  
+  for (const line of lines) {
+    const trimmedLine = line.trim();
+    const parts = trimmedLine.split('|').map(p => p.trim());
+    
+    // Valid pipe-delimited position (author | claim | category)
     if (parts.length >= 3 && parts[1].length > 10) {
       pipeDelimitedCount++;
+    } else if (
+      trimmedLine.toUpperCase().includes('WRITE') ||
+      trimmedLine.toUpperCase().includes('TURN') ||
+      trimmedLine.toUpperCase().includes('PICK') ||
+      trimmedLine.toUpperCase().includes('CONTENTION') ||
+      trimmedLine.toUpperCase().includes('FOLLOWING') ||
+      trimmedLine.toUpperCase().includes('DISSERTATION') ||
+      trimmedLine.toUpperCase().includes('THESIS') ||
+      trimmedLine.toUpperCase().includes('DEFENSE') ||
+      trimmedLine.toUpperCase().includes('PAGE') ||
+      trimmedLine.toUpperCase().includes('WORD') ||
+      trimmedLine.length === 0
+    ) {
+      // This looks like an instruction line, not content
+      instructionLines++;
     }
   }
 
-  return pipeDelimitedCount >= lines.slice(0, 20).length * 0.7;
+  // Need at least 3 valid positions
+  if (pipeDelimitedCount < 3) return false;
+  
+  // If we have at least 3 pipe-delimited positions, this is a position list
+  // The threshold is positions / (total lines - instruction lines) >= 50%
+  const contentLines = lines.length - instructionLines;
+  return contentLines > 0 && pipeDelimitedCount >= contentLines * 0.5;
+}
+
+/**
+ * Extract instruction lines from the beginning of the text
+ * These are lines that contain keywords like WRITE, PICK, TURN, etc.
+ */
+function extractInstructionLines(text: string): string {
+  const lines = text.trim().split('\n');
+  const instructionLines: string[] = [];
+  
+  const instructionKeywords = [
+    'WRITE', 'TURN', 'PICK', 'SELECT', 'CHOOSE', 'CONTENTION', 
+    'DISSERTATION', 'THESIS', 'DEFENSE', 'ESSAY', 'PAGE', 'WORD',
+    'FOLLOWING', 'MASTER', 'ANALYSIS'
+  ];
+  
+  for (const line of lines) {
+    const trimmed = line.trim();
+    const upper = trimmed.toUpperCase();
+    
+    // Check if this line contains instruction keywords (not pipe-delimited)
+    const hasPipes = trimmed.split('|').length >= 3;
+    const hasKeyword = instructionKeywords.some(kw => upper.includes(kw));
+    
+    if (!hasPipes && hasKeyword && trimmed.length > 5) {
+      instructionLines.push(trimmed);
+    }
+  }
+  
+  return instructionLines.join(' ');
 }
 
 function parsePositions(text: string): Position[] {
@@ -81,10 +138,17 @@ function parsePositions(text: string): Position[] {
 }
 
 /**
- * FIX #1: Properly parse selection count, recognizing "EACH", "ALL", "EVERY"
+ * FIX #1: Properly parse selection count, recognizing "EACH", "ALL", "EVERY", and word numbers
  */
 function parseSelectionCount(customInstructions: string, totalPositions: number): number {
   const upper = customInstructions.toUpperCase();
+  
+  // Word to number mapping
+  const wordToNum: Record<string, number> = {
+    'ONE': 1, 'TWO': 2, 'THREE': 3, 'FOUR': 4, 'FIVE': 5,
+    'SIX': 6, 'SEVEN': 7, 'EIGHT': 8, 'NINE': 9, 'TEN': 10,
+    'ELEVEN': 11, 'TWELVE': 12, 'FIFTEEN': 15, 'TWENTY': 20, 'TWENTY-FIVE': 25
+  };
 
   // Check for "ALL" or "EACH" or "EVERY" indicators - process everything
   const allIndicators = [
@@ -95,6 +159,8 @@ function parseSelectionCount(customInstructions: string, totalPositions: number)
     /\bALL\s+POSITIONS/i,
     /\bDEFEND\s+EACH/i,
     /\bDEFEND\s+ALL/i,
+    /\bON\s+EACH\s+OF\s+THE/i,  // "WRITE ONE PAGE ON EACH OF THE FOLLOWING"
+    /\bPER\s+EACH/i,
   ];
 
   for (const pattern of allIndicators) {
@@ -104,11 +170,34 @@ function parseSelectionCount(customInstructions: string, totalPositions: number)
     }
   }
 
+  // Check for word-based selection (PICK FIVE, SELECT THREE, etc.)
+  const wordSelectionPatterns = [
+    /\bPICK\s+(ONE|TWO|THREE|FOUR|FIVE|SIX|SEVEN|EIGHT|NINE|TEN|ELEVEN|TWELVE|FIFTEEN|TWENTY)/i,
+    /\bSELECT\s+(ONE|TWO|THREE|FOUR|FIVE|SIX|SEVEN|EIGHT|NINE|TEN|ELEVEN|TWELVE|FIFTEEN|TWENTY)/i,
+    /\bCHOOSE\s+(ONE|TWO|THREE|FOUR|FIVE|SIX|SEVEN|EIGHT|NINE|TEN|ELEVEN|TWELVE|FIFTEEN|TWENTY)/i,
+    /\bTOP\s+(ONE|TWO|THREE|FOUR|FIVE|SIX|SEVEN|EIGHT|NINE|TEN|ELEVEN|TWELVE|FIFTEEN|TWENTY)/i,
+    /\bBEST\s+(ONE|TWO|THREE|FOUR|FIVE|SIX|SEVEN|EIGHT|NINE|TEN|ELEVEN|TWELVE|FIFTEEN|TWENTY)/i,
+  ];
+  
+  for (const pattern of wordSelectionPatterns) {
+    const match = customInstructions.match(pattern);
+    if (match) {
+      const numWord = match[1].toUpperCase();
+      const num = wordToNum[numWord];
+      if (num) {
+        console.log(`[POSITION-LIST] Detected word selection count: ${numWord} = ${num}`);
+        return num;
+      }
+    }
+  }
+
   // Check for explicit numeric selection
   const numericPatterns = [
     /(?:top|best|most\s+(?:significant|important|crucial))\s+(\d+)/i,
     /(\d+)\s+(?:most|best|top)/i,
-    /select\s+(\d+)/i,
+    /\bselect\s+(\d+)/i,
+    /\bpick\s+(\d+)/i,
+    /\bchoose\s+(\d+)/i,
     /defend\s+(?:the\s+)?(\d+)\s+(?:most|best|top)/i,
     /focus\s+on\s+(\d+)/i,
   ];
@@ -116,7 +205,9 @@ function parseSelectionCount(customInstructions: string, totalPositions: number)
   for (const pattern of numericPatterns) {
     const match = customInstructions.match(pattern);
     if (match) {
-      return parseInt(match[1]);
+      const num = parseInt(match[1]);
+      console.log(`[POSITION-LIST] Detected numeric selection count: ${num}`);
+      return num;
     }
   }
 
@@ -473,7 +564,18 @@ export async function processPositionList(
   onProgress?: (stage: string, current: number, total: number) => void
 ): Promise<PositionListResult> {
   console.log('[POSITION-LIST] Starting position list processing');
-  console.log(`[POSITION-LIST] Custom instructions: ${customInstructions || 'None'}`);
+  
+  // Extract instruction lines from the text itself
+  const embeddedInstructions = extractInstructionLines(text);
+  
+  // Combine embedded instructions with any explicit custom instructions
+  const allInstructions = [embeddedInstructions, customInstructions]
+    .filter(s => s.trim().length > 0)
+    .join(' ');
+  
+  console.log(`[POSITION-LIST] Embedded instructions: ${embeddedInstructions || 'None'}`);
+  console.log(`[POSITION-LIST] Explicit custom instructions: ${customInstructions || 'None'}`);
+  console.log(`[POSITION-LIST] Combined instructions: ${allInstructions || 'None'}`);
 
   if (!process.env.ANTHROPIC_API_KEY) {
     return {
@@ -503,20 +605,20 @@ export async function processPositionList(
     }
 
     // FIX #7: Parse format requirements BEFORE determining selection count
-    const format = parseDefenseFormat(customInstructions);
+    const format = parseDefenseFormat(allInstructions);
 
     // FIX #8: Pass total positions to parseSelectionCount
-    const targetCount = parseSelectionCount(customInstructions, positions.length);
+    const targetCount = parseSelectionCount(allInstructions, positions.length);
     const effectiveTarget = Math.min(targetCount, positions.length);
     console.log(`[POSITION-LIST] Targeting ${effectiveTarget} positions (requested: ${targetCount}, total: ${positions.length})`);
 
     onProgress?.('Ranking positions by significance...', 1, 4);
-    const rankedPositions = await rankPositions(positions, customInstructions, effectiveTarget);
+    const rankedPositions = await rankPositions(positions, allInstructions, effectiveTarget);
     console.log(`[POSITION-LIST] Selected ${rankedPositions.length} positions`);
 
     onProgress?.('Generating defenses...', 2, 4);
     // FIX #9: Pass format and onProgress to generateDefenses for per-batch updates
-    const defenses = await generateDefenses(rankedPositions, customInstructions, format, onProgress);
+    const defenses = await generateDefenses(rankedPositions, allInstructions, format, onProgress);
     console.log(`[POSITION-LIST] Generated ${defenses.length} defenses`);
 
     onProgress?.('Formatting output...', 3, 4);
@@ -527,7 +629,7 @@ POSITION DEFENSE ANALYSIS
 ${'═'.repeat(55)}
 Total Positions Submitted: ${positions.length}
 Positions Selected for Defense: ${rankedPositions.length}
-Selection Criterion: ${customInstructions || 'All positions processed'}
+Selection Criterion: ${allInstructions || 'All positions processed'}
 ${'═'.repeat(55)}
 
 `;
