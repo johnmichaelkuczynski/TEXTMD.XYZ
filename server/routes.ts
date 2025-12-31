@@ -593,6 +593,151 @@ export async function registerRoutes(app: Express): Promise<Express> {
     }
   });
   
+  // ============================================
+  // STRIPE PAYMENT ROUTES
+  // ============================================
+  
+  // Stripe checkout session creation (requires login)
+  app.post("/api/stripe/create-checkout-session", async (req: Request, res: Response) => {
+    console.log('[STRIPE] Checkout session request');
+    
+    if (!req.isAuthenticated() || !req.user) {
+      console.log('[STRIPE] Not authenticated');
+      return res.status(401).json({ error: "You must be logged in to subscribe" });
+    }
+    
+    const userId = (req.user as any).id;
+    console.log('[STRIPE] User ID:', userId);
+    
+    try {
+      const Stripe = (await import('stripe')).default;
+      const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, { apiVersion: '2025-05-28.basil' });
+      
+      const session = await stripe.checkout.sessions.create({
+        mode: 'subscription',
+        payment_method_types: ['card'],
+        line_items: [{
+          price: process.env.STRIPE_PRICE_ID!,
+          quantity: 1,
+        }],
+        metadata: {
+          userId: userId.toString()
+        },
+        success_url: 'https://textmd.xyz/billing/success?session_id={CHECKOUT_SESSION_ID}',
+        cancel_url: 'https://textmd.xyz/billing/cancel',
+      });
+      
+      console.log('[STRIPE] Session created:', session.id);
+      res.json({ url: session.url });
+    } catch (error: any) {
+      console.error('[STRIPE] Checkout error:', error);
+      res.status(500).json({ error: "Failed to create checkout session" });
+    }
+  });
+  
+  // Stripe webhook handler (uses raw body for signature verification)
+  app.post("/api/stripe/webhook", express.raw({ type: 'application/json' }), async (req: Request, res: Response) => {
+    console.log('[STRIPE WEBHOOK] Received webhook');
+    
+    const sig = req.headers['stripe-signature'];
+    if (!sig) {
+      console.log('[STRIPE WEBHOOK] Missing signature');
+      return res.status(400).send('Missing stripe-signature header');
+    }
+    
+    try {
+      const Stripe = (await import('stripe')).default;
+      const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, { apiVersion: '2025-05-28.basil' });
+      
+      const event = stripe.webhooks.constructEvent(
+        req.body,
+        sig,
+        process.env.STRIPE_WEBHOOK_SECRET!
+      );
+      
+      console.log('[STRIPE WEBHOOK] Event type:', event.type);
+      
+      switch (event.type) {
+        case 'checkout.session.completed': {
+          const session = event.data.object as any;
+          const userId = session.metadata?.userId;
+          const stripeCustomerId = session.customer as string;
+          const stripeSubscriptionId = session.subscription as string;
+          
+          console.log('[STRIPE WEBHOOK] Checkout completed:', { userId, stripeCustomerId, stripeSubscriptionId });
+          
+          if (userId) {
+            await storage.updateUserStripeInfo(
+              parseInt(userId),
+              stripeCustomerId,
+              stripeSubscriptionId,
+              true
+            );
+            console.log('[STRIPE WEBHOOK] User updated to Pro:', userId);
+          }
+          break;
+        }
+        
+        case 'customer.subscription.updated': {
+          const subscription = event.data.object as any;
+          const stripeCustomerId = subscription.customer as string;
+          const status = subscription.status;
+          
+          console.log('[STRIPE WEBHOOK] Subscription updated:', { stripeCustomerId, status });
+          
+          const user = await storage.getUserByStripeCustomerId(stripeCustomerId);
+          if (user) {
+            const isPro = status === 'active';
+            await storage.updateUserProStatus(user.id, isPro);
+            console.log('[STRIPE WEBHOOK] User Pro status updated:', { userId: user.id, isPro });
+          }
+          break;
+        }
+        
+        case 'customer.subscription.deleted': {
+          const subscription = event.data.object as any;
+          const stripeCustomerId = subscription.customer as string;
+          
+          console.log('[STRIPE WEBHOOK] Subscription deleted:', stripeCustomerId);
+          
+          const user = await storage.getUserByStripeCustomerId(stripeCustomerId);
+          if (user) {
+            await storage.updateUserProStatus(user.id, false);
+            console.log('[STRIPE WEBHOOK] User Pro revoked:', user.id);
+          }
+          break;
+        }
+      }
+      
+      res.json({ received: true });
+    } catch (error: any) {
+      console.error('[STRIPE WEBHOOK] Error:', error.message);
+      res.status(400).send(`Webhook Error: ${error.message}`);
+    }
+  });
+  
+  // Billing status endpoint
+  app.get("/api/billing/status", async (req: Request, res: Response) => {
+    if (!req.isAuthenticated() || !req.user) {
+      return res.status(401).json({ error: "Authentication required" });
+    }
+    
+    const userId = (req.user as any).id;
+    const user = await storage.getUser(userId);
+    
+    if (!user) {
+      return res.status(404).json({ error: "User not found" });
+    }
+    
+    res.json({
+      isPro: user.isPro,
+      hasSubscription: !!user.stripeSubscriptionId,
+    });
+  });
+  
+  // ============================================
+  // END STRIPE PAYMENT ROUTES
+  // ============================================
   
   // Output management endpoints (login required - OPTION A architecture)
   app.get("/api/output/:outputId", async (req: Request, res: Response) => {
