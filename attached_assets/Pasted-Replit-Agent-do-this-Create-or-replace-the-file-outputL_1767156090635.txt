@@ -1,0 +1,96 @@
+Replit Agent, do this:
+
+Create or replace the file outputLimiter.ts (or wherever storeAndReturnOutput and isDevBypass are defined) with this exact code:
+
+TypeScript// outputLimiter.ts
+
+import { Request } from "express";
+import { storage } from "./storage";
+
+// ONLY true in your local Replit workspace — never in production
+export function isDevBypass(_req: Request): boolean {
+  return process.env.REPLIT_DEV_DOMAIN !== undefined;
+}
+
+// Truncate: 65% of words OR first 1000 words, whichever is shorter
+function truncateText(fullText: string): string {
+  const words = fullText.trim().split(/\s+/);
+  if (words.length <= 1000) return fullText;
+
+  const sixtyFivePercent = Math.floor(words.length * 0.65);
+  const maxWords = Math.min(1000, sixtyFivePercent);
+
+  return words.slice(0, maxWords).join(" ") +
+    "\n\n[Upgrade to Pro to see the full output]";
+}
+
+// Main function used by all generation routes
+export async function storeAndReturnOutput(
+  fullText: string,
+  outputType: string,
+  isPro: boolean,
+  userId: number | null,
+  devBypass: boolean,
+  metadata: any = {}
+) {
+  const canSeeFull = devBypass || isPro;
+  const displayText = canSeeFull ? fullText : truncateText(fullText);
+
+  const words = fullText.trim().split(/\s+/);
+  const fullWordCount = words.length;
+  const previewWordCount = displayText.trim().split(/\s+/).length;
+
+  // Save full + preview to DB
+  const saved = await storage.saveGeneratedOutput({
+    userId,
+    outputFull: fullText,
+    outputPreview: displayText,
+    outputType,
+    metadata: metadata ? JSON.stringify(metadata) : null,
+    isTruncated: !canSeeFull,
+  });
+
+  return {
+    content: displayText,
+    outputId: saved.outputId || saved.id,
+    isTruncated: !canSeeFull,
+    fullWordCount,
+    previewWordCount,
+  };
+}
+
+In routes.ts, replace every single call to the old storeAndReturnOutput with the new one.
+
+Find these lines (there are several — in quick-analysis, intelligent-rewrite, cognitive-evaluate, rewrite, case-assessment non-streaming path, etc.):
+TypeScriptconst outputResult = await storeAndReturnOutput(
+  resultText,
+  'some-type',
+  isPro,
+  userId,
+  devBypass,
+  { ... }
+);
+Make sure they now pass devBypass correctly. Example fix for one of them (do this for all):
+TypeScriptconst devBypass = isDevBypass(req);  // Add this line near the top of the route
+
+// Later:
+const outputResult = await storeAndReturnOutput(
+  resultText,
+  'quick-analysis',
+  isPro,
+  userId,
+  devBypass,
+  { provider, evaluationType }
+);
+
+Remove any old isDevBypass function from routes.ts or elsewhere — the new one in outputLimiter.ts is the only one to use.
+Do not change anything else. No new tables, no new columns, no Stripe changes.
+
+This will:
+
+Give you full output in your Replit workspace only
+Show truncated output to anonymous and unpaid users on textmd.xyz
+Show full output to paid users
+Save full text for logged-in users so they unlock it when they pay later
+
+Deploy after this and test in incognito.

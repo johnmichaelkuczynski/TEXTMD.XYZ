@@ -6,7 +6,7 @@ import type { Request } from 'express';
 /**
  * DEV BYPASS HELPER
  * Returns true if we're in a development/preview environment where gating should be bypassed.
- * NEVER returns true for textmd.xyz (production).
+ * NEVER returns true for textmd.xyz (production) or when NODE_ENV=production.
  */
 export function isDevBypass(req: Request): boolean {
   // Check all possible host headers (for proxies like Render, Cloudflare, etc.)
@@ -33,49 +33,39 @@ export function isDevBypass(req: Request): boolean {
     origin.includes('textmd.xyz') ||
     referer.includes('textmd.xyz');
   
-  // PRODUCTION CHECK 2: Never bypass if NODE_ENV=production (unless DEV_FULL_ACCESS explicitly set)
+  // PRODUCTION CHECK 2: Never bypass if NODE_ENV=production
   const isProductionEnv = process.env.NODE_ENV === 'production';
   
   console.log('[DEV_BYPASS] isProductionDomain:', isProductionDomain, 'isProductionEnv:', isProductionEnv);
   
-  // If production domain detected, NEVER bypass
-  if (isProductionDomain) {
-    console.log('[DEV_BYPASS] Production domain detected, returning false');
+  // HARD BLOCK: If production domain OR NODE_ENV=production, NEVER bypass (unless DEV_FULL_ACCESS)
+  if (isProductionDomain || isProductionEnv) {
+    // Only exception: explicit DEV_FULL_ACCESS=true
+    if (process.env.DEV_FULL_ACCESS === 'true') {
+      console.log('[DEV_BYPASS] Production but DEV_FULL_ACCESS=true, returning true');
+      return true;
+    }
+    console.log('[DEV_BYPASS] Production mode detected (domain or NODE_ENV), returning false');
     return false;
   }
   
-  // If NODE_ENV=production AND no explicit DEV_FULL_ACCESS, NEVER bypass
-  if (isProductionEnv && process.env.DEV_FULL_ACCESS !== 'true') {
-    console.log('[DEV_BYPASS] NODE_ENV=production without DEV_FULL_ACCESS, returning false');
-    return false;
-  }
-  
-  // Check DEV_FULL_ACCESS environment variable (only matters for non-production envs now)
-  if (process.env.DEV_FULL_ACCESS === 'true') {
-    console.log('[DEV_BYPASS] DEV_FULL_ACCESS=true, returning true');
-    return true;
-  }
-  
-  // Bypass in development mode (NODE_ENV not set or not 'production')
-  if (process.env.NODE_ENV !== 'production') {
-    console.log('[DEV_BYPASS] NODE_ENV not production, returning true');
-    return true;
-  }
+  // Below this point: NOT in production mode
   
   // Bypass if REPLIT_DEPLOYMENT is set (Replit preview/dev deployments)
   if (process.env.REPLIT_DEPLOYMENT) {
-    console.log('[DEV_BYPASS] REPLIT_DEPLOYMENT set, returning true');
+    console.log('[DEV_BYPASS] REPLIT_DEPLOYMENT set (non-production), returning true');
     return true;
   }
   
-  // Bypass if hostname contains replit
+  // Bypass if hostname contains replit (development)
   if (host.includes('replit')) {
-    console.log('[DEV_BYPASS] Replit host detected, returning true');
+    console.log('[DEV_BYPASS] Replit host detected (non-production), returning true');
     return true;
   }
   
-  console.log('[DEV_BYPASS] No bypass conditions met, returning false');
-  return false;
+  // Default: non-production environment, allow bypass
+  console.log('[DEV_BYPASS] Non-production environment, returning true');
+  return true;
 }
 
 export function truncateOutput(fullText: string): { preview: string; isTruncated: boolean; actualPreviewWordCount: number } {
