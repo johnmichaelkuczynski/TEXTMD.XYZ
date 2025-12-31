@@ -767,7 +767,7 @@ DOES THE AUTHOR USE OTHER AUTHORS TO DEVELOP HIS IDEAS OR TO CLOAK HIS OWN LACK 
     reader.readAsText(file);
   };
 
-  // Text Model Validator Handler
+  // Text Model Validator Handler - with SSE streaming support
   const handleValidatorProcess = async (mode: "reconstruction") => {
     if (!validatorInputText.trim()) {
       toast({
@@ -789,13 +789,17 @@ DOES THE AUTHOR USE OTHER AUTHORS TO DEVELOP HIS IDEAS OR TO CLOAK HIS OWN LACK 
     } else if (wordCount > 25000) {
       setValidatorProgress("Processing large document (cross-chunk mode)...");
     } else {
-      setValidatorProgress("");
+      setValidatorProgress("Processing...");
     }
 
     try {
+      // Use SSE streaming for real-time progress feedback
       const response = await fetch('/api/text-model-validator', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          'Accept': 'text/event-stream'
+        },
         body: JSON.stringify({
           text: validatorInputText,
           mode,
@@ -812,19 +816,67 @@ DOES THE AUTHOR USE OTHER AUTHORS TO DEVELOP HIS IDEAS OR TO CLOAK HIS OWN LACK 
         }),
       });
 
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.message || 'Validation failed');
-      }
+      // Check if we got SSE response
+      const contentType = response.headers.get('content-type') || '';
+      
+      if (contentType.includes('text/event-stream') && response.body) {
+        // Handle SSE streaming
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split('\n');
+          buffer = lines.pop() || '';
+          
+          for (const line of lines) {
+            if (line.startsWith('event: ')) {
+              const eventType = line.slice(7);
+              continue;
+            }
+            if (line.startsWith('data: ')) {
+              try {
+                const data = JSON.parse(line.slice(6));
+                if (data.stage) {
+                  setValidatorProgress(`${data.stage} (${data.current}/${data.total})`);
+                }
+                if (data.output) {
+                  setValidatorOutput(stripMarkdown(data.output));
+                  setObjectionsInputText(stripMarkdown(data.output));
+                  toast({
+                    title: "Validation Complete!",
+                    description: `Text validated using ${mode} mode.`,
+                  });
+                }
+                if (data.message) {
+                  throw new Error(data.message);
+                }
+              } catch (parseError) {
+                // Skip parse errors for partial data
+              }
+            }
+          }
+        }
+      } else {
+        // Regular JSON response
+        if (!response.ok) {
+          const errorData = await response.json();
+          throw new Error(errorData.message || 'Validation failed');
+        }
 
-      const data = await response.json();
-      if (data.success && data.output) {
-        setValidatorOutput(stripMarkdown(data.output));
-        setObjectionsInputText(stripMarkdown(data.output));
-        toast({
-          title: "Validation Complete!",
-          description: `Text validated using ${mode} mode. Reconstructed text has been loaded into the Objections input.`,
-        });
+        const data = await response.json();
+        if (data.success && data.output) {
+          setValidatorOutput(stripMarkdown(data.output));
+          setObjectionsInputText(stripMarkdown(data.output));
+          toast({
+            title: "Validation Complete!",
+            description: `Text validated using ${mode} mode. Reconstructed text has been loaded into the Objections input.`,
+          });
+        }
       }
     } catch (error: any) {
       console.error('Validator error:', error);

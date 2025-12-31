@@ -3216,6 +3216,70 @@ Structural understanding is always understanding of relationships. Observational
         const { isPositionList, processPositionList } = await import('./services/positionListReconstruction');
         if (isPositionList(text)) {
           console.log(`[Position-List] Detected structured position list input`);
+          
+          // Check if client wants streaming (Accept: text/event-stream)
+          const wantsStreaming = req.headers.accept?.includes('text/event-stream');
+          
+          if (wantsStreaming) {
+            // SSE streaming for real-time progress
+            res.setHeader('Content-Type', 'text/event-stream');
+            res.setHeader('Cache-Control', 'no-cache');
+            res.setHeader('Connection', 'keep-alive');
+            res.setHeader('X-Accel-Buffering', 'no');
+            res.flushHeaders();
+            
+            const sendEvent = (event: string, data: any) => {
+              res.write(`event: ${event}\n`);
+              res.write(`data: ${JSON.stringify(data)}\n\n`);
+            };
+            
+            try {
+              const result = await processPositionList(
+                text, 
+                customInstructions || '',
+                (stage, current, total) => {
+                  sendEvent('progress', { stage, current, total });
+                }
+              );
+              
+              if (!result.success) {
+                sendEvent('error', { message: result.error || 'Processing failed' });
+              } else {
+                // Apply truncation for non-Pro users
+                const outputResult = await storeAndReturnOutput(
+                  result.output,
+                  'text-model-validator',
+                  isPro,
+                  userId,
+                  devBypass,
+                  { mode, reconstructionMethod: 'position-list' }
+                );
+                
+                sendEvent('complete', {
+                  success: true,
+                  output: outputResult.content,
+                  mode: mode,
+                  reconstructionMethod: 'position-list',
+                  positionsProcessed: result.positionsProcessed,
+                  positionsSelected: result.positionsSelected,
+                  totalPositions: result.totalPositions,
+                  outputId: outputResult.outputId,
+                  isTruncated: outputResult.isTruncated,
+                  fullWordCount: outputResult.fullWordCount,
+                  previewWordCount: outputResult.previewWordCount
+                });
+              }
+              res.end();
+              return;
+            } catch (plError: any) {
+              console.error('[Position-List] Streaming error:', plError);
+              sendEvent('error', { message: plError.message });
+              res.end();
+              return;
+            }
+          }
+          
+          // Non-streaming JSON response (fallback)
           try {
             const result = await processPositionList(text, customInstructions || '');
             
