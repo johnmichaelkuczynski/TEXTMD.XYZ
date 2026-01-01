@@ -198,7 +198,7 @@ DOES THE AUTHOR USE OTHER AUTHORS TO DEVELOP HIS IDEAS OR TO CLOAK HIS OWN LACK 
   const [validatorTruthMapping, setValidatorTruthMapping] = useState<"false-to-true" | "true-to-true" | "true-to-false">("false-to-true");
   const [validatorMathTruthMapping, setValidatorMathTruthMapping] = useState<"make-true" | "keep-true" | "make-false">("make-true");
   const [validatorLiteralTruth, setValidatorLiteralTruth] = useState(false);
-  const [validatorLLMProvider, setValidatorLLMProvider] = useState<string>("zhi4"); // Default to ZHI 4 (DeepSeek)
+  const [validatorLLMProvider, setValidatorLLMProvider] = useState<string>("zhi1"); // Default to ZHI 1 (OpenAI)
   
   // Objections Function State (standalone)
   const [objectionsOutput, setObjectionsOutput] = useState("");
